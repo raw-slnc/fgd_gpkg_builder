@@ -10,6 +10,7 @@
 """
 
 import os
+import re
 import zipfile
 
 from osgeo import gdal, ogr, osr
@@ -83,14 +84,60 @@ def _ensure_table(ds, name, geometry_type, fields):
     return layer
 
 
-def _sql(ds, statement):
+# ---- SQL（GDAL の ExecuteSQL は値を別に渡せないので文で組み立てる） ----
+#
+# 組み立てるのは下の _delete・_select_first・rtree_subset だけ。表・列の名前は _ident で英数字と
+# アンダースコアだけのもの（このプラグインが決めた名前）に限り、値は _quote（文字）か int（数）で入れる。
+# 外から来た文字がそのまま SQL の文になることはないので、組み立てる3行だけ bandit の B608 を外している。
+
+_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _ident(name):
+    """表・列の名前を SQL に入れる形（"名前"）にする。想定外の文字があれば止める"""
+    if not _IDENTIFIER.match(str(name)):
+        raise ValueError(tr("Unexpected table or column name: {0}", "想定していない表・項目の名前です：{0}").format(name))
+    return '"{0}"'.format(name)
+
+
+def _quote(text):
+    return "'" + str(text).replace("'", "''") + "'"
+
+
+def _condition(conditions):
+    """[(項目, 値)...] を「項目 = 値 AND ...」にする。値は int なら数、ほかは文字として入れる"""
+    parts = []
+    for column, value in conditions:
+        literal = str(int(value)) if isinstance(value, int) else _quote(value)
+        parts.append("{0} = {1}".format(_ident(column), literal))
+    return " AND ".join(parts)
+
+
+def _delete(ds, table, conditions):
+    statement = "DELETE FROM " + _ident(table) + " WHERE " + _condition(conditions)  # nosec B608
     result = ds.ExecuteSQL(statement)
     if result is not None:
         ds.ReleaseResultSet(result)
 
 
-def _quote(text):
-    return "'" + str(text).replace("'", "''") + "'"
+def _select_first(ds, expressions, table, conditions=()):
+    """1行目の値のリスト。expressions は COUNT(*)・MIN(項目) などこのモジュールで決めた式だけ"""
+    where = " WHERE " + _condition(conditions) if conditions else ""
+    statement = "SELECT " + ", ".join(expressions) + " FROM " + _ident(table) + where  # nosec B608
+    result = ds.ExecuteSQL(statement)
+    values = None
+    if result is not None:
+        feature = result.GetNextFeature()
+        if feature is not None:
+            values = [feature.GetField(i) for i in range(len(expressions))]
+        ds.ReleaseResultSet(result)
+    return values
+
+
+def rtree_subset(table, rtree_where):
+    """GeoPackage の空間索引（R-tree）で絞り込むレイヤーの subset。rtree_where は数だけで作った範囲の条件"""
+    rtree = _ident("rtree_" + table + "_geom")
+    return '"fid" IN (SELECT "id" FROM ' + rtree + " WHERE " + rtree_where + ")"  # nosec B608
 
 
 def _polygon_wkt(lon0, lat0, lon1, lat1):
@@ -191,14 +238,9 @@ def bv_date_range(path, source_layer):
     ds = open_store(path, False)
     if ds is None or ds.GetLayerByName(BV_TILES_TABLE) is None:
         return "", ""
-    result = ds.ExecuteSQL("SELECT MIN(source_date), MAX(source_date) FROM {0} WHERE source_layer = {1}".format(
-        BV_TILES_TABLE, _quote(source_layer)))
-    dates = ("", "")
-    if result is not None:
-        feature = result.GetNextFeature()
-        if feature is not None:
-            dates = tuple((feature.GetField(i) or "").replace("-", "") for i in range(2))
-        ds.ReleaseResultSet(result)
+    values = _select_first(ds, ["MIN(source_date)", "MAX(source_date)"], BV_TILES_TABLE,
+                           [("source_layer", source_layer)])
+    dates = tuple((v or "").replace("-", "") for v in values) if values else ("", "")
     ds = None
     return dates
 
@@ -211,17 +253,11 @@ def table_summary(path, table, dated):
     if ds.GetLayerByName(table) is None:
         ds = None
         return None
-    columns = "COUNT(*), MIN(data_date), MAX(data_date)" if dated else "COUNT(*)"
-    result = ds.ExecuteSQL('SELECT {0} FROM "{1}"'.format(columns, table))
+    expressions = ["COUNT(*)", "MIN(data_date)", "MAX(data_date)"] if dated else ["COUNT(*)"]
+    values = _select_first(ds, expressions, table)
     summary = None
-    if result is not None:
-        feature = result.GetNextFeature()
-        if feature is not None:
-            if dated:
-                summary = (feature.GetField(0) or 0, feature.GetField(1) or "", feature.GetField(2) or "")
-            else:
-                summary = (feature.GetField(0) or 0, "", "")
-        ds.ReleaseResultSet(result)
+    if values is not None:
+        summary = (values[0] or 0, values[1] or "", values[2] or "") if dated else (values[0] or 0, "", "")
     ds = None
     return summary
 
@@ -329,8 +365,7 @@ def _ensure_mesh_table(out):
 
 
 def _write_mesh_record(out, mesh, type_info, data_date, file_names, fetched_at, bounds, layer_counts):
-    _sql(out, "DELETE FROM {0} WHERE mesh_code = {1} AND type_code = {2}".format(
-        MESH_TABLE, _quote(mesh), _quote(type_info["code"])))
+    _delete(out, MESH_TABLE, [("mesh_code", mesh), ("type_code", type_info["code"])])
     mesh_layer = out.GetLayerByName(MESH_TABLE)
     record = ogr.Feature(mesh_layer.GetLayerDefn())
     record.SetGeometry(ogr.CreateGeometryFromWkt(_polygon_wkt(*bounds)))
@@ -349,7 +384,7 @@ def _write_fgd_type(out, mesh, layer_codes, sources, data_date, cancel_cb):
     counts = {code: 0 for code in layer_codes}
     for code in layer_codes:
         if out.GetLayerByName(code) is not None:
-            _sql(out, 'DELETE FROM "{0}" WHERE mesh_code = {1}'.format(code, _quote(mesh)))
+            _delete(out, code, [("mesh_code", mesh)])
     for code, ds in sources:
         out_layer = out.GetLayerByName(code)
         if out_layer is None:
@@ -417,11 +452,11 @@ def _write_bv_tiles(out, layers, items, zoom, results, fetched_at, source_date, 
         if cancel_cb is not None and cancel_cb():
             raise InterruptedError()
         x, y = result["x"], result["y"]
-        where = "tile_z = {0} AND tile_x = {1} AND tile_y = {2}".format(int(zoom), int(x), int(y))
+        tile_key = [("tile_z", int(zoom)), ("tile_x", int(x)), ("tile_y", int(y))]
         for item in items:
             name = item["source_layer"]
-            _sql(out, 'DELETE FROM "{0}" WHERE {1}'.format(bv_table(item), where))
-            _sql(out, "DELETE FROM {0} WHERE source_layer = {1} AND {2}".format(BV_TILES_TABLE, _quote(name), where))
+            _delete(out, bv_table(item), tile_key)
+            _delete(out, BV_TILES_TABLE, [("source_layer", name)] + tile_key)
             out_layer = layers[name]
             defn = out_layer.GetLayerDefn()
             rows = result["features"].get(name, [])
@@ -660,7 +695,7 @@ def place_layers(path, group_name, fgd_codes, bv_items, meshes):
     def bv_subset(table):
         if meshes is None:
             return ""
-        return '"fid" IN (SELECT "id" FROM "rtree_{0}_geom" WHERE {1})'.format(table, rtree_where)
+        return rtree_subset(table, rtree_where)
 
     def place(table, name, group_getter, style, rights):
         summary = table_summary(path, table, dated=not table.startswith("bv_"))
