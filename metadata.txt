@@ -1,0 +1,21 @@
+[general]
+name=G.S.I. Fundamental GeoPackage Builder
+qgisMinimumVersion=3.44
+qgisMaximumVersion=4.99
+description=Fetches the Fundamental Geospatial Data (基盤地図情報) and optimized vector tiles of the Geospatial Information Authority of Japan sheet by sheet (2nd-level meshes) and builds them into one GeoPackage, placed as grouped layers.
+version=0.0.1
+author=Hideharu Masai
+email=hideharumasai@void.mints.ne.jp
+about=Downloads the basic items of the GSI Fundamental Geospatial Data (基盤地図情報 基本項目) for the 2nd-level meshes (about 10 km square) covering the current map view, and stores them in a single GeoPackage instead of many shapefiles. The latest data date is shown for each mesh and item, and data already stored and up to date is not downloaded again. Selected features of the GSI optimized vector tiles (a trial release, no login needed) can be fetched for the same area. The layers are placed in the Layers panel in groups, named by data date and item. Downloading the Fundamental Geospatial Data requires a free user account for the GSI download service; the ID and password can be saved in the QGIS settings (not encrypted). Japan only. Requires GDAL 3.8 or later for the vector tiles (PMTiles driver) and an internet connection.
+changelog=
+    0.0.1 - First development version.
+category=Web
+tags=python,japan,gsi,fundamental geospatial data,vector tiles,geopackage
+repository=https://github.com/raw-slnc/fgd_gpkg_builder
+tracker=https://github.com/raw-slnc/fgd_gpkg_builder/issues
+homepage=https://github.com/raw-slnc/fgd_gpkg_builder
+icon=icon.png
+experimental=True
+deprecated=False
+hasProcessingProvider=no
+server=False
