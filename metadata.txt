@@ -3,19 +3,19 @@ name=G.S.I. and Fundamental GeoPackage Builder
 qgisMinimumVersion=3.44
 qgisMaximumVersion=4.99
 description=Fetches the Fundamental Geospatial Data (基盤地図情報) and optimized vector tiles of the Geospatial Information Authority of Japan sheet by sheet (2nd-level meshes) and builds them into one GeoPackage, placed as grouped layers.
-version=0.0.1
+version=0.1.0
 author=Hideharu Masai
 email=hideharumasai@void.mints.ne.jp
-about=G.S.I. stands for Grid Sheet Importer. The plugin fetches the basic items of the Fundamental Geospatial Data (基盤地図情報 基本項目) of the Geospatial Information Authority of Japan (GSI) and selected features of the GSI optimized vector tiles (a trial release), sheet by sheet (2nd-level meshes, about 10 km square), and stores them in a single GeoPackage instead of many shapefiles. The latest data date and the stored state are shown for each mesh in a table and as colours on the map, and data already stored and up to date is not downloaded again. Fetching goes mesh by mesh, so stopping never leaves a half-imported mesh. The layers are placed in the Layers panel in groups, for the visible meshes or for all stored areas. A GSI Tiles (pale map) preview helps to choose the area. English and Japanese user interface. Downloading the Fundamental Geospatial Data requires a free user account for the GSI download service (the optimized vector tiles need no login); the ID and password can be saved in the QGIS settings (not encrypted). Japan only. Requires GDAL 3.8 or later for the vector tiles (PMTiles driver) and an internet connection. This plugin is an independent work and is not affiliated with or endorsed by GSI. Use of the fetched data must follow the GSI terms of use and the Survey Act of Japan (attribution, noting any processing, and an application where required). The plugin is provided without warranty; the author takes no responsibility for any result of its use.
+about=Grid Sheet Importer and Fundamental GeoPackage Builder is a QGIS plugin that fetches the basic items of the Fundamental Geospatial Data (基盤地図情報 基本項目) of the Geospatial Information Authority of Japan (GSI) and selected features of the GSI optimized vector tiles (a trial release), sheet by sheet (2nd-level meshes, about 10 km square), and stores them in a single GeoPackage instead of many shapefiles. The latest data date and the stored state are shown for each mesh in a table and as colours on the map, and data already stored and up to date is not downloaded again. Fetching goes mesh by mesh, so stopping never leaves a half-imported mesh. The layers are placed in the Layers panel in groups, for the visible meshes or for all stored areas. A GSI Tiles (pale map) preview helps to choose the area. English and Japanese user interface. Fetching requires a free user account for the GSI download service and a login; the ID and password can be saved in the QGIS settings (not encrypted). Japan only. Requires GDAL 3.8 or later for the vector tiles (PMTiles driver) and an internet connection. This plugin was not made by GSI, and is not endorsed or guaranteed by GSI. Use of the fetched data must follow the GSI terms of use and the Survey Act of Japan (attribution, noting any processing, and an application where required). The plugin is provided without warranty; the author takes no responsibility for any result of its use.
 changelog=
-    0.0.1 - First development version.
+    0.1.0 - First public release.
 category=Web
 tags=python,japan,gsi,fundamental geospatial data,vector tiles,geopackage
 repository=https://github.com/raw-slnc/fgd_gpkg_builder
 tracker=https://github.com/raw-slnc/fgd_gpkg_builder/issues
 homepage=https://github.com/raw-slnc/fgd_gpkg_builder
 icon=icon.png
-experimental=True
+experimental=False
 deprecated=False
 hasProcessingProvider=no
 server=False

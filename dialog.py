@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """取得画面。
 
-左に取得する内容（基盤地図情報＝要ログイン、最適化ベクトルタイル＝ログイン不要）、右に表示範囲に
+左に使用データ（基盤地図情報・最適化ベクトルタイル）、右に表示範囲に
 掛かる2次メッシュごとの最新データと保存済みの状況を並べる。範囲は表示範囲に掛かる2次メッシュ全体。
 地図には、取得済みの範囲すべてを今のチェックに対する状況で塗る（そろっている／一部だけ）。
 文字は英語が基本で日本語は訳（i18n.tr）。言語を切り替えると窓を作り直す（plugin.py）。
@@ -15,17 +15,18 @@ from qgis.core import (
     QgsLayerMetadata, QgsPointXY, QgsProject, QgsRasterLayer,
 )
 from qgis.gui import QgsRubberBand
-from qgis.PyQt.QtCore import QPropertyAnimation, QSettings, Qt, QTimer, pyqtSignal
-from qgis.PyQt.QtGui import QBrush, QColor, QFont, QKeySequence
+from qgis.PyQt.QtCore import QEvent, QPropertyAnimation, QSettings, Qt, QTimer, QUrl, pyqtSignal
+from qgis.PyQt.QtGui import QBrush, QColor, QDesktopServices, QFont, QKeySequence, QPalette
 
 try:  # Qt6（QGIS 4）は QtGui、Qt5（QGIS 3）は QtWidgets
     from qgis.PyQt.QtGui import QShortcut
 except ImportError:
     from qgis.PyQt.QtWidgets import QShortcut
 from qgis.PyQt.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout,
-    QHeaderView, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
-    QSizePolicy, QSplitter, QStyle, QTableWidget, QTableWidgetItem, QToolButton, QTreeWidget, QTreeWidgetItem,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame, QGroupBox,
+    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar, QProgressDialog,
+    QPushButton,
+    QSizePolicy, QSplitter, QTableWidget, QTableWidgetItem, QToolButton, QTreeWidget, QTreeWidgetItem,
     QVBoxLayout, QWidget,
 )
 
@@ -62,6 +63,20 @@ ACTIVITY_ORDER = ("stored", "list")
 ACTION_MIN_LINES = 4
 # 表に並べるメッシュの数（超えたら表は省き、地図の色で見てもらう）
 TABLE_MAX_ROWS = 300
+# 「レイヤーを更新しています…」の知らせを出してから、配置を始めるまでの時間（秒）。窓が画面に出て描かれる間
+NOTICE_SETTLE = 0.2
+# 記録（ログ）の欄の高さ。開くときは、この分だけ窓の高さを伸ばす
+LOG_HEIGHT = 120
+# マニュアル（プラグインのフォルダの HTML。英語と日本語を中で切り替える）
+MANUAL_FILE = "manual_fgd_gpkg_builder.html"
+# 保存先：プロジェクトと同じ階層のフォルダとその中の GeoPackage。使う保存先はプロジェクトファイルに記録する
+DATA_DIR_NAME = "gsi_fgd_builder"
+DATA_FILE_NAME = "gsi_fgd_builder.gpkg"
+PROJECT_SCOPE = "fgd_gpkg_builder"
+PROJECT_KEY = "gpkg_path"
+# 使用データのロック（プロジェクトごと）：ロックしているか、ロックしたときのチェック（"fgd:RdEdg" などの並び）
+PROJECT_LOCKED_KEY = "lock_checked"
+PROJECT_LOCK_KEY = "locked"
 # 配置する範囲（コンボボックスの並び）
 PLACE_VISIBLE, PLACE_ALL = 0, 1
 
@@ -73,12 +88,8 @@ COLOR_GRAY_TEXT = QColor("#9a9a9a")
 # 地図の塗り（今のチェックに対して）
 COLOR_MAP_FULL = QColor(46, 157, 58, 70)     # チェックした内容がそろっている
 COLOR_MAP_PART = QColor(240, 185, 0, 110)    # 一部だけ（チェックを足した範囲・新しいデータあり）
-# 取得・中止のボタン（押せないときは灰色）
-_ACTION_STYLE = (
-    "QPushButton {{ background:{base}; color:white; border:none; border-radius:4px; padding:4px 16px; }}"
-    "QPushButton:hover {{ background:{hover}; }}"
-    "QPushButton:disabled {{ background:#b8b8b8; color:#eeeeee; }}"
-)
+# 操作のボタンの色（パレットで付ける。文字は白）
+ACTION_COLORS = {"fetch": "#2a6fb0", "place": "#2e8540", "cancel": "#c0392b"}
 
 
 class FgdGpkgDialog(QDialog):
@@ -104,10 +115,14 @@ class FgdGpkgDialog(QDialog):
         self._stored_cache = None      # 保存先の取得の記録（読み直すときは None に）
         self._stored_thread = None
         self._stored_again = False
+        self._stored_last = None       # (ファイルの状態, 読んだ結果)。ファイルが変わっていなければ読み直さない
+        self._content_widths = []      # 状況の表の、中身に合わせた欄の幅（余りを配る元）
         self._center_tile_counts = {}  # {メッシュ: 中心がそのメッシュに入るタイルの数}
         self._preview_id = None
         self._open = False
         self._close_after_fetch = False  # 閉じるために取得を中止した（止まったら閉じる）
+        self._summary_before = []        # 付け替えて取得し直す前の取得の結果（終わったら続けて出す）
+        self._asking_shared = False      # 「共有データとして使用しますか？」を聞いている途中
         # 進み具合を出す処理（"stored"＝保存先の読み込み、"list"＝最新の状況の問い合わせ）
         self._activities = {}            # {処理: {"value", "max", "done", "shown"}}
         self._activity_shown = None      # 今、進捗バーに出している処理
@@ -121,8 +136,8 @@ class FgdGpkgDialog(QDialog):
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowMinMaxButtonsHint
                             | Qt.WindowType.WindowCloseButtonHint)
         # 英語は日本語より文が長いので、少し広めにする
-        self.setMinimumSize(960, 660)
-        self.resize(1200, 760)
+        # 大きさは決め打ちにしない。部品が入りきる最小の大きさで開き（圧迫感を出さない）、それより小さくはしない
+        # （窓の最小はレイアウトが決める）。組み立てたあとで _fit_minimum する
 
         # 取得済みの範囲の塗り（下）と、可視範囲に掛かるメッシュの橙の枠（上）
         self.statusRubbers = {}
@@ -145,6 +160,7 @@ class FgdGpkgDialog(QDialog):
         layout.addWidget(self._build_login_box())
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._splitter = splitter
         splitter.addWidget(self._build_tree_panel())
         splitter.addWidget(self._build_mesh_panel())
         splitter.setStretchFactor(0, 2)
@@ -153,27 +169,91 @@ class FgdGpkgDialog(QDialog):
         splitter.setSizes([400, 780])
         layout.addWidget(splitter, 1)
 
+        # 上から 使用データ・状況の表 → 保存とレイヤー → 取得・配置（実行の区域）→ 記録
         layout.addWidget(self._build_output_box())
         layout.addWidget(self._build_progress_area())
-        layout.addLayout(self._build_buttons())
+        layout.addWidget(self._build_log_area())
+        self._disable_auto_default()
 
+        # 出典は1つずつ1行（3行）。1つの文で折り返すと、切れ目が中途半端になった。
+        # 「出典：」を左に分けて置き、2行目・3行目の頭を1行目の出典の頭にそろえる
+        source_row = QHBoxLayout()
+        source_title = QLabel(tr("Sources:", "出典："))
         source = QLabel(tr(
-            'Sources: <a href="{0}">{1}</a>, <a href="{2}">{3}</a> (trial release; the URL and contents may change). '
+            '<a href="{0}">{1}</a><br>'
+            '<a href="{2}">{3}</a> (trial release; the URL and contents may change)<br>'
             'Preview map: <a href="{4}">{5}</a>',
-            '出典：<a href="{0}">{1}</a>、<a href="{2}">{3}</a>（試験公開。URL やデータの内容が変わることがあります）、'
-            'プレビュー地図は<a href="{4}">{5}</a>',
+            '<a href="{0}">{1}</a><br>'
+            '<a href="{2}">{3}</a>（試験公開。URL やデータの内容が変わることがあります）<br>'
+            'プレビュー地図：<a href="{4}">{5}</a>',
         ).format(FGD_SOURCE_PAGE, fgd_attribution(), BV_SOURCE_PAGE, bv_attribution(), PREVIEW_SOURCE_PAGE,
                  preview_attribution()))
         source.setOpenExternalLinks(True)
         source.setWordWrap(True)
-        source.setStyleSheet("color:#555;")
-        layout.addWidget(source)
+        for label in (source_title, source):
+            label.setStyleSheet("color:#555;")
+            label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        source_row.setSpacing(0)
+        source_row.addWidget(source_title, 0, Qt.AlignmentFlag.AlignTop)
+        if not is_japanese():
+            # 英語は「:」のあとに空きが無いと詰まって見える（日本語の「：」は字の中に空きがある）
+            source_row.addSpacing(self.fontMetrics().horizontalAdvance(" "))
+        source_row.addWidget(source, 1)
+        layout.addLayout(source_row)
 
         # Ctrl+W でも閉じる（Esc・閉じるボタン・窓の × と同じく closeEvent を通る）
         QShortcut(QKeySequence("Ctrl+W"), self, self.close)
 
+        # プロジェクトを開き直した・初めて保存した・閉じたときは、保存先を決め直す（窓を開いている間だけ）
+        project = QgsProject.instance()
+        project.readProject.connect(self._resolve_project_path)
+        project.fileNameChanged.connect(self._resolve_project_path)
+        project.cleared.connect(self._resolve_project_path)
+
         self._update_login_state()
         self._update_summary()
+        self._fitted = False  # 初めて表示したあとに、部品が入りきる最小の大きさに合わせる（showEvent）
+        # 大きさと位置は表示してから決める（文の折り返しなどは表示しないと決まらない）。決める途中の
+        # 「表示→移動」が見えないよう、決め終えるまで透明にしておく（_place_initially で戻す）
+        self.setWindowOpacity(0.0)
+        self._log_delta = 0   # 記録を開いたときに窓を伸ばした高さ（閉じるときに縮める）
+
+    def _fit_minimum(self):
+        """部品が入りきる最小の大きさにする。表示して部品の並び（文の折り返しなど）が決まってから呼ぶ"""
+        self.layout().activate()
+        self.resize(self.minimumSizeHint())
+        # 窓の最小は、折り返す文（出典の行・実行の区域の文）を実際の幅で折り返したときの高さを少なく見積もる。
+        # その分、真ん中の区域（使用データの木・状況の表）が最小より低くなり、表と凡例が重なったので、
+        # 足りない分だけ窓を伸ばし、その高さを窓の最小にする
+        self.layout().activate()
+        shortage = self._splitter.minimumSizeHint().height() - self._splitter.height()
+        if shortage > 0:
+            # 先に高さを決める（最小を上げた時点で窓が伸びるので、そのあとの高さに足すと伸びすぎた）
+            height = self.height() + shortage
+            self.setMinimumHeight(height)
+            self.resize(self.width(), height)
+        self._place_initially()
+        # 大きさと位置が決まったので見えるようにする
+        self.setWindowOpacity(1.0)
+
+    def _place_initially(self):
+        """最初に置く位置。大きさが決まったので QGIS の窓の真ん中に置き直し、記録を開いて窓が伸びても
+        画面の下に収まるよう、その分だけ上に置く（画面の上端より上には置かない）"""
+        frame = self.frameGeometry()
+        main = self.iface.mainWindow() if hasattr(self.iface, "mainWindow") else None
+        if main is not None:
+            frame.moveCenter(main.frameGeometry().center())
+        screen = self.screen() if hasattr(self, "screen") else None
+        if screen is not None:
+            area = screen.availableGeometry()
+            spacing = self.layout().spacing() if self.layout() is not None else 0
+            # 記録の分（欄の高さとその上の間隔）を下に空けておく
+            bottom = frame.bottom() + LOG_HEIGHT + max(spacing, 0)
+            if bottom > area.bottom():
+                frame.moveTop(max(frame.top() - (bottom - area.bottom()), area.top()))
+            if frame.top() < area.top():
+                frame.moveTop(area.top())
+        self.move(frame.topLeft())
 
     # ================= 言語の切り替え =================
 
@@ -184,16 +264,21 @@ class FgdGpkgDialog(QDialog):
             "session": self.session, "session_user": self.session_user,
             "listing_by_mesh": dict(self._listing_by_mesh), "log": self.logEdit.toPlainText(),
             "log_shown": self.logToggle.isChecked(), "geometry": self.saveGeometry(),
+            "stored_last": self._stored_last,
         }
 
     def restore_state(self, state):
         self.session = state["session"]
         self.session_user = state["session_user"]
         self._listing_by_mesh = state["listing_by_mesh"]
+        self._stored_last = state["stored_last"]
         if state["log"]:
             self.logEdit.setPlainText(state["log"])
         self.logToggle.setChecked(state["log_shown"])
         self.restoreGeometry(state["geometry"])
+        # 前の窓の大きさを引き継いだので、最小の大きさに合わせ直さない（透明にしておく必要もない）
+        self._fitted = True
+        self.setWindowOpacity(1.0)
         self._update_login_state()
 
     def _switch_language(self):
@@ -227,11 +312,13 @@ class FgdGpkgDialog(QDialog):
         panel = QWidget()
         column = QVBoxLayout(panel)
         column.setContentsMargins(0, 0, 0, 0)
-        column.addWidget(QLabel(tr("Contents to fetch", "取得する内容")))
+        column.addWidget(QLabel(tr("Data to use", "使用データ")))
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
         self.tree.setUniformRowHeights(True)
         self.tree.setMinimumWidth(340)
+        # 窓を最小にしても、5行ほどは見えるようにする
+        self.tree.setMinimumHeight(self.fontMetrics().lineSpacing() * 5 + 30)
         # 名前を「…」で切らず、入りきらないときは横に送れるようにする（英語の名前は長い）
         self.tree.header().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.tree.header().setStretchLastSection(False)
@@ -240,10 +327,10 @@ class FgdGpkgDialog(QDialog):
         paren = tr("{0} ({1})", "{0}（{1}）")
 
         self._leaf_by_key = {}
-        self._fgd_root = QTreeWidgetItem([tr("Fundamental Geospatial Data (login required)", "基盤地図情報（要ログイン）")])
+        self._fgd_root = QTreeWidgetItem([tr("Fundamental Geospatial Data", "基盤地図情報")])
         self._fgd_root.setData(0, ROLE, ("root", "fgd"))
         for type_info in FGD_TYPES:
-            type_item = QTreeWidgetItem([paren.format(fgd_type_name(type_info), type_info["code"])])
+            type_item = QTreeWidgetItem([fgd_type_name(type_info)])
             type_item.setData(0, ROLE, ("type", type_info["code"]))
             for code, _name in type_info["layers"]:
                 leaf = QTreeWidgetItem([paren.format(fgd_layer_name(code), code)])
@@ -259,7 +346,7 @@ class FgdGpkgDialog(QDialog):
             self._fgd_root.addChild(type_item)
 
         # 最適化ベクトルタイルは分類ごとにまとめる。初めて開いたときは何も選ばない（タイルが多く時間がかかるため）
-        self._bv_root = QTreeWidgetItem([tr("Optimized vector tiles (no login)", "最適化ベクトルタイル（ログイン不要）")])
+        self._bv_root = QTreeWidgetItem([tr("Optimized vector tiles", "最適化ベクトルタイル")])
         self._bv_root.setData(0, ROLE, ("root", "bv"))
         self._bv_categories = []
         for category in BV_CATEGORIES:
@@ -299,12 +386,36 @@ class FgdGpkgDialog(QDialog):
         column.addWidget(self.tree, 1)
 
         buttons = QHBoxLayout()
+        self._select_buttons = []
         for text, state in ((tr("Select all", "すべて選ぶ"), Qt.CheckState.Checked),
                             (tr("Clear all", "すべて外す"), Qt.CheckState.Unchecked)):
             button = QToolButton()
             button.setText(text)
             button.clicked.connect(lambda _checked=False, s=state: self._set_all(s))
             buttons.addWidget(button)
+            self._select_buttons.append(button)
+        # 今のチェックを構成としてプロジェクトに記録し、変えられないようにする。同じ構成で別の場所を取得するときに
+        self.lockButton = QToolButton()
+        self.lockButton.setCheckable(True)
+        self.lockButton.setToolTip(tr(
+            "Records the checked items for this project and locks them. Press again to unlock.",
+            "今のチェックをこのプロジェクトの構成として記録し、ロックします。もう一度押すと外します。"))
+        self.lockButton.clicked.connect(self._toggle_lock)
+        # 「ロック」「ロック中」で幅が変わると右の「構成を復元」がずれるので、長い方の幅に固定する
+        widths = []
+        for text in (tr("Lock", "ロック"), tr("Locked", "ロック中")):
+            self.lockButton.setText(text)
+            widths.append(self.lockButton.sizeHint().width())
+        self.lockButton.setFixedWidth(max(widths))
+        buttons.addWidget(self.lockButton)
+        # ロックで最後に記録した構成のチェックに戻す（ロックは外したまま）。記録するロックの右に置く
+        self.restoreButton = QToolButton()
+        self.restoreButton.setText(tr("Restore", "構成を復元"))
+        self.restoreButton.setToolTip(tr("Returns the checks to the configuration last recorded by the lock.",
+                                         "チェックを、ロックで最後に記録した構成に戻します。"))
+        self.restoreButton.clicked.connect(self._restore_locked)
+        buttons.addWidget(self.restoreButton)
+        self._update_lock_ui()
         buttons.addStretch(1)
         column.addLayout(buttons)
         return panel
@@ -313,16 +424,13 @@ class FgdGpkgDialog(QDialog):
         panel = QWidget()
         column = QVBoxLayout(panel)
         column.setContentsMargins(0, 0, 0, 0)
-        header = QHBoxLayout()
+        # 表の情報（メッシュの数など）は、表の凡例の下に置く（下で column に足す）
         self.meshLabel = QLabel("")
         self.meshLabel.setWordWrap(True)
-        header.addWidget(self.meshLabel, 1)
-        self.listButton = QPushButton(tr("Check latest status", "最新の状況を確認"))
-        self.listButton.clicked.connect(lambda _checked=False: self._start_list(refresh=True))
-        header.addWidget(self.listButton)
-        column.addLayout(header)
+        # 折り返す文の高さは部品の並びが少なく見積もり、窓を最小にすると3行目が切れた（英語は3行になる）
+        self.meshLabel.setMinimumHeight(self.fontMetrics().lineSpacing() * 3)
 
-        map_row = QHBoxLayout()
+        # プレビュー地図のチェックは、地図の凡例と同じ段（実行の区域の進捗バーの段）に置く
         self.previewCheckbox = QCheckBox(tr("Show preview map (GSI Tiles, pale map)",
                                             "プレビュー地図（地理院タイル・淡色地図）を表示"))
         self.previewCheckbox.setToolTip(tr(
@@ -331,11 +439,10 @@ class FgdGpkgDialog(QDialog):
             "取得する範囲を選ぶための背景です。この窓を閉じるとレイヤーパネルから外します。"))
         self.previewCheckbox.setChecked(QSettings().value(SETTINGS + "preview_map", True, type=bool))
         self.previewCheckbox.toggled.connect(self._sync_preview)
-        map_row.addWidget(self.previewCheckbox)
-        map_row.addStretch(1)
-        column.addLayout(map_row)
 
         self.table = QTableWidget(0, len(FGD_TYPES) + 1)
+        # 窓を最小にしても、見出しと2行（日付と状況の2段の行）は見えるようにする
+        self.table.setMinimumHeight(self.fontMetrics().lineSpacing() * 6 + 40)
         self.table.setHorizontalHeaderLabels([tr("Mesh", "メッシュ")] + [fgd_type_short(t) for t in FGD_TYPES])
         for index, type_info in enumerate(FGD_TYPES):
             self.table.horizontalHeaderItem(index + 1).setToolTip(
@@ -343,39 +450,32 @@ class FgdGpkgDialog(QDialog):
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        # 日付が切れないよう欄の幅は中身に合わせる（狭いときは横に送れる）。合わせるのは表を埋め終えたとき（_fill_table）
-        self.table.horizontalHeader().setStretchLastSection(True)
+        # 欄の幅は中身に合わせ（日付が切れないように）、表に余りがあれば全部の欄に均等に配る（_fit_columns）。
+        # 最後の欄だけで埋めない。入りきらないときは横に送れる
+        self.table.horizontalHeader().setStretchLastSection(False)
+        # 表の中の表示部分の幅が変わったら（窓の大きさ・分割・縦のスクロールバーの出入り）、余りを配り直す
+        self.table.viewport().installEventFilter(self)
         column.addWidget(self.table, 1)
 
-        # 凡例は表の色と地図の塗りを1行ずつ（チェックボックスと同じ行に置くと文字が切れた）
-        for title, entries in (
-            (tr("Table:", "表："), (
-                (COLOR_CURRENT, tr("Stored (latest)", "保存済み（最新）")),
-                (COLOR_UPDATE, tr("Newer data", "新しいデータあり")),
-                (QColor("white"), tr("Not fetched", "未取得")), (COLOR_NONE, tr("No data", "データなし")))),
-            (tr("Map:", "地図："), (
-                (COLOR_MAP_FULL, tr("All checked contents stored", "チェックした内容がそろっている")),
-                (COLOR_MAP_PART, tr("Partly stored", "一部だけ")))),
-        ):
-            legend = QHBoxLayout()
-            legend.addWidget(QLabel(title))
-            for color, text in entries:
-                swatch = QLabel("  ")
-                swatch.setStyleSheet("background:rgba({0},{1},{2},{3}); border:1px solid #bbb;".format(
-                    color.red(), color.green(), color.blue(), color.alpha()))
-                legend.addWidget(swatch)
-                legend.addWidget(QLabel(text))
-                legend.addSpacing(8)
-            legend.addStretch(1)
-            column.addLayout(legend)
+        # 表の色の凡例（地図の塗りの凡例は、実行の区域の進捗バーの段に置く）
+        table_legend = _legend_row("", (
+            (COLOR_CURRENT, tr("Stored (latest)", "保存済み（最新）")),
+            (COLOR_UPDATE, tr("Newer data", "新しいデータあり")),
+            (QColor("white"), tr("Not fetched", "未取得")), (COLOR_NONE, tr("No data", "データなし"))))
+        # 最新の状況の確認は、表の内容を新しくする操作なので、表の凡例の右に置く
+        self.listButton = QPushButton(tr("Check latest status", "最新の状況を確認"))
+        self.listButton.clicked.connect(lambda _checked=False: self._start_list(refresh=True))
+        table_legend.addWidget(self.listButton)
+        column.addLayout(table_legend)
+        column.addWidget(self.meshLabel)
         return panel
 
     def _build_output_box(self):
         box = QGroupBox(tr("Storage and layers", "保存とレイヤー"))
         form = QFormLayout(box)
         path_row = QHBoxLayout()
-        default_path = os.path.join(os.path.expanduser("~"), "fgd_gpkg_builder.gpkg")
-        self.pathEdit = QLineEdit(QSettings().value(SETTINGS + "gpkg_path", default_path))
+        # 保存先はプロジェクトごとに決める（_resolve_project_path）。初めはプロジェクトの隣のフォルダの GeoPackage
+        self.pathEdit = QLineEdit("")
         self.pathEdit.editingFinished.connect(self._on_path_changed)
         path_row.addWidget(self.pathEdit, 1)
         self.pathButton = QToolButton()
@@ -397,8 +497,7 @@ class FgdGpkgDialog(QDialog):
         form.addRow(tr("Group name", "グループ名"), self.groupEdit)
 
         options = QHBoxLayout()
-        self.skipCheckbox = QCheckBox(tr("Do not refetch stored data that is up to date",
-                                         "保存済みで最新のものは取り直さない"))
+        self.skipCheckbox = QCheckBox(tr("Skip up-to-date data", "最新のものは取り直さない"))
         self.skipCheckbox.setChecked(QSettings().value(SETTINGS + "skip_current", True, type=bool))
         self.skipCheckbox.toggled.connect(self._update_summary)
         options.addWidget(self.skipCheckbox)
@@ -426,7 +525,8 @@ class FgdGpkgDialog(QDialog):
         texts_widget.setMinimumHeight(self.fontMetrics().lineSpacing() * ACTION_MIN_LINES)
         texts = QVBoxLayout(texts_widget)
         texts.setContentsMargins(0, 0, 0, 0)
-        texts.setAlignment(Qt.AlignmentFlag.AlignTop)
+        # 文（見込み・状態の行）はいつも上から並べ、進捗バーだけを一番下に置く（右の列の一番下の取得・中止と
+        # 同じ段に並ぶように）。間は伸び縮みする空き。下に詰めると状態の行が中ほどの段に来てしまった
         # 待機中：何が起きるか（件数・大きさ、押せないときはその理由）
         self.planLabel = QLabel("")
         self.planLabel.setWordWrap(True)
@@ -441,6 +541,7 @@ class FgdGpkgDialog(QDialog):
         for label in (self.planLabel, self.stageLabel):
             label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
             label.setMinimumWidth(360)
+        texts.addStretch(1)
         bars = QHBoxLayout()
         self.progressBar = QProgressBar()
         self.progressBar.setFormat(tr("Meshes %v / %m", "メッシュ %v / %m"))
@@ -448,35 +549,76 @@ class FgdGpkgDialog(QDialog):
         self.fileBar = QProgressBar()
         self.fileBar.setFormat(tr("Current step %p%", "今の作業 %p%"))
         bars.addWidget(self.fileBar, 2)
+        # 地図の塗りの凡例。進捗バーと同じ段に置き、進捗バーが出ている間は隠す（eventFilter）
+        # 地図の凡例の段：プレビュー地図のチェック、地図の塗りの凡例（どちらも地図の見え方に関わるもの）
+        self.mapLegend = QWidget()
+        legend = _legend_row(tr("Map:", "地図："), (
+            (COLOR_MAP_FULL, tr("All checked contents stored", "チェックした内容がそろっている")),
+            (COLOR_MAP_PART, tr("Partly stored", "一部だけ"))))
+        legend.insertWidget(0, self.previewCheckbox)
+        legend.insertSpacing(1, 16)
+        legend.setContentsMargins(0, 0, 0, 0)
+        self.mapLegend.setLayout(legend)
+        self.mapLegend.setFixedHeight(self.progressBar.sizeHint().height())
+        bars.addWidget(self.mapLegend, 1)
         texts.addLayout(bars)
         for bar in (self.progressBar, self.fileBar):
             bar.setVisible(False)
+        self.progressBar.installEventFilter(self)
         # 保存先の読み込み・最新の状況の問い合わせでは、進捗バーの値を動かして見せる（取得のときは使わない）
         self._barAnimation = QPropertyAnimation(self.progressBar, b"value", self)
         self._barAnimation.finished.connect(self._on_bar_animation_finished)
         action_row.addWidget(texts_widget, 1)
 
-        # 取得・中止は同じ場所で入れ替わる。画面のいちばん大事な操作なので大きく、色を付ける
-        bold = QFont()
-        bold.setBold(True)
+        # 取得・中止は同じ場所で入れ替わる。標準のボタンに文字だけ（アイコンは付けない。色は下でパレットで付ける）
         self.fetchButton = QPushButton(tr("Fetch", "取得"))
-        self.fetchButton.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowDown))
-        self.fetchButton.setStyleSheet(_ACTION_STYLE.format(base="#1f6fb2", hover="#2a82cc"))
         self.fetchButton.clicked.connect(self._start_fetch)
         self.cancelButton = QPushButton(tr("Stop", "中止"))
-        self.cancelButton.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserStop))
-        self.cancelButton.setStyleSheet(_ACTION_STYLE.format(base="#c0392b", hover="#d9483a"))
         self.cancelButton.clicked.connect(self._cancel_fetch)
         self.cancelButton.setVisible(False)
-        for button in (self.fetchButton, self.cancelButton):
-            button.setFont(bold)
-            # 高さはほかのボタンと同じ。幅だけ広げる（横に広がると見込みの文が細い列に押し込まれたので固定する）
-            button.setMinimumWidth(160)
-            button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-            # 区域の下端にそろえる（取得中は進み具合の棒と同じ高さに並ぶ）
-            action_row.addWidget(button, 0, Qt.AlignmentFlag.AlignBottom)
-        column.addWidget(action)
+        # レイヤーへの配置と、配置する範囲の選択も、取得と同じ操作の列に置く
+        self.placeButton = QPushButton(tr("Place layers", "レイヤーへ配置"))
+        self.placeButton.setToolTip(tr("Places the stored data in the Layers panel without fetching.",
+                                       "保存先にあるデータを、取得せずにレイヤーパネルへ置きます。"))
+        self.placeButton.clicked.connect(lambda _checked=False: self._place_layers())
+        self.placeScope = QComboBox()
+        self.placeScope.addItems([tr("Visible meshes only", "可視範囲のメッシュだけ"),
+                                  tr("All stored areas", "取得済みの範囲すべて")])
+        self.placeScope.setToolTip(tr("The area shown by the layers, also when placing them after fetching.",
+                                      "レイヤーで見せる範囲。取得後に配置するときもこの範囲です。"))
+        scope = QSettings().value(SETTINGS + "place_scope", PLACE_VISIBLE, type=int)
+        self.placeScope.setCurrentIndex(scope if scope in (PLACE_VISIBLE, PLACE_ALL) else PLACE_VISIBLE)
 
+        # 標準のボタンのまま、パレットで色を付ける（押せないときは標準の灰色）。範囲の選択は素の部品のまま
+        _tint(self.fetchButton, ACTION_COLORS["fetch"])
+        _tint(self.cancelButton, ACTION_COLORS["cancel"])
+        _tint(self.placeButton, ACTION_COLORS["place"])
+        # 上から 取得／レイヤーへ配置／配置する範囲（配置だけに効く）。取得してから配置する流れの順
+        # （取得前に配置を押すと「保存先がまだない」になる）。取得中はこの3段を隠して中止だけを出す。
+        # 隠したものは詰まり、下に寄せてあるので、中止は一番下の段（進捗バーと同じ段）に来る（_set_running）。
+        # 幅はそろえて固定する（横に広がると見込みの文が細い列に押し込まれた）。高さは進捗バーと同じ
+        actions_widget = QWidget()
+        actions = QVBoxLayout(actions_widget)
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.setAlignment(Qt.AlignmentFlag.AlignBottom)
+        width = max(160, self.placeScope.sizeHint().width(), self.placeButton.sizeHint().width())
+        row_height = self.progressBar.sizeHint().height()
+        for widget in (self.fetchButton, self.placeButton, self.placeScope, self.cancelButton):
+            widget.setFixedWidth(width)
+            widget.setFixedHeight(row_height)
+            widget.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            actions.addWidget(widget)
+        # 取得中は中止の1段だけになるが、区域の高さが変わらないよう3段分の高さを確保しておく
+        actions_widget.setMinimumHeight(row_height * 3 + max(actions.spacing(), 0) * 2)
+        action_row.addWidget(actions_widget)
+        column.addWidget(action)
+        return area
+
+    def _build_log_area(self):
+        """記録の行（記録の開け閉め・マニュアル・言語）と記録の欄。窓の下の方に置く"""
+        area = QWidget()
+        column = QVBoxLayout(area)
+        column.setContentsMargins(0, 0, 0, 0)
         toggle_row = QHBoxLayout()
         self.logToggle = QToolButton()
         self.logToggle.setText(tr("Log", "記録"))
@@ -487,42 +629,42 @@ class FgdGpkgDialog(QDialog):
         self.logToggle.toggled.connect(self._toggle_log)
         toggle_row.addWidget(self.logToggle)
         toggle_row.addStretch(1)
-        column.addLayout(toggle_row)
-        self.logEdit = QPlainTextEdit()
-        self.logEdit.setReadOnly(True)
-        self.logEdit.setMaximumHeight(120)
-        self.logEdit.setVisible(False)
-        column.addWidget(self.logEdit)
-        return area
-
-    def _build_buttons(self):
-        row = QHBoxLayout()
-        self.placeButton = QPushButton(tr("Place layers", "レイヤーへ配置"))
-        self.placeButton.setToolTip(tr("Places the stored data in the Layers panel without fetching.",
-                                       "保存先にあるデータを、取得せずにレイヤーパネルへ置きます。"))
-        self.placeButton.clicked.connect(lambda _checked=False: self._place_layers())
-        row.addWidget(self.placeButton)
-        self.placeScope = QComboBox()
-        self.placeScope.addItems([tr("Visible meshes only", "可視範囲のメッシュだけ"),
-                                  tr("All stored areas", "取得済みの範囲すべて")])
-        self.placeScope.setToolTip(tr("The area shown by the layers, also when placing them after fetching.",
-                                      "レイヤーで見せる範囲。取得後に配置するときもこの範囲です。"))
-        scope = QSettings().value(SETTINGS + "place_scope", PLACE_VISIBLE, type=int)
-        self.placeScope.setCurrentIndex(scope if scope in (PLACE_VISIBLE, PLACE_ALL) else PLACE_VISIBLE)
-        row.addWidget(self.placeScope)
-        row.addStretch(1)
-        # 今の言語を出し、押すと切り替える
+        # マニュアル（HTML）を、今の言語でブラウザに開く
+        self.manualButton = QPushButton(tr("Manual", "マニュアル"))
+        self.manualButton.clicked.connect(self._open_manual)
+        toggle_row.addWidget(self.manualButton)
+        # 今の言語を出し、押すと切り替える。記録の行の右端に置く（記録を開くと欄はこの行の下に伸びる）
         self.languageButton = QPushButton(tr("Language: English", "言語：日本語"))
         self.languageButton.setToolTip(tr("Switch to Japanese (the window is rebuilt).",
                                           "英語に切り替えます（窓を作り直します）。"))
         self.languageButton.clicked.connect(self._switch_language)
-        row.addWidget(self.languageButton)
-        # 閉じるボタンは置かない（窓の ×・Esc・Ctrl+W で閉じる。× と役目が重なるため）
-        for button in (self.placeButton, self.fetchButton, self.cancelButton, self.languageButton):
-            button.setAutoDefault(False)
-        return row
+        toggle_row.addWidget(self.languageButton)
+        column.addLayout(toggle_row)
+        self.logEdit = QPlainTextEdit()
+        self.logEdit.setReadOnly(True)
+        # 開くときはこの高さの分だけ窓を伸ばす（ほかの区域を狭めない。_toggle_log）
+        self.logEdit.setFixedHeight(LOG_HEIGHT)
+        self.logEdit.setVisible(False)
+        column.addWidget(self.logEdit)
+        return area
 
-    # ================= 取得する内容 =================
+    def _disable_auto_default(self):
+        # Enter で勝手に押されないよう、どのボタンも既定のボタンにしない。
+        # 閉じるボタンは置かない（窓の ×・Esc・Ctrl+W で閉じる。× と役目が重なるため）
+        for button in (self.placeButton, self.fetchButton, self.cancelButton, self.manualButton, self.languageButton):
+            button.setAutoDefault(False)
+
+    def _open_manual(self):
+        path = os.path.join(os.path.dirname(__file__), MANUAL_FILE)
+        if not os.path.exists(path):
+            QMessageBox.warning(self, self.windowTitle(), tr("The manual could not be found.",
+                                                             "マニュアルが見つかりませんでした。"))
+            return
+        # ほかのプラグインと同じく、ファイルの URL をそのまま渡す。言語はブラウザの設定で決まり、マニュアルの中でも
+        # 切り替えられる（URL に #lang=… を付けると、Flatpak の QGIS では開かなかった）
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
+    # ================= 使用データ（取得・配置・地図の塗りに使う項目） =================
 
     def _all_parents(self):
         parents = [self._fgd_root, self._bv_root]
@@ -554,6 +696,100 @@ class FgdGpkgDialog(QDialog):
         # 同じ地物はどちらか一方なので、すべて選ぶときは基盤地図情報を後に選び、基盤地図情報の方を残す
         for root in (self._bv_root, self._fgd_root):
             root.setCheckState(0, state)
+
+    # ================= 使用データのロック（プロジェクトごと） =================
+
+    def _checked_keys(self):
+        keys = []
+        for leaf in self._leaves():
+            if leaf.checkState(0) == Qt.CheckState.Checked:
+                keys.append("{0}:{1}".format(*leaf.data(0, ROLE)))
+        return keys
+
+    def _is_locked(self):
+        return self.lockButton.isChecked()
+
+    def _toggle_lock(self, locked):
+        project = QgsProject.instance()
+        if locked:
+            keys = self._checked_keys()
+            if not keys:
+                self.lockButton.setChecked(False)
+                QMessageBox.information(self, self.windowTitle(), tr(
+                    "Check the data to use before locking.", "使用データにチェックを入れてからロックしてください。"))
+                return
+            project.writeEntry(PROJECT_SCOPE, PROJECT_LOCKED_KEY, keys)
+        project.writeEntryBool(PROJECT_SCOPE, PROJECT_LOCK_KEY, bool(locked))
+        self._update_lock_ui()
+
+    def _apply_project_lock(self):
+        """今のプロジェクトのロックを窓に移す。ロックしていれば、記録した構成のチェックにする"""
+        project = QgsProject.instance()
+        locked, _ok = project.readBoolEntry(PROJECT_SCOPE, PROJECT_LOCK_KEY, False)
+        keys = self._locked_keys()
+        locked = bool(locked and keys)
+        if locked:
+            self._set_checked_keys(keys)
+        self.lockButton.setChecked(locked)
+        self._update_lock_ui()
+        self._fill_table()
+        self._update_summary()
+        self._draw_status()
+
+    def _locked_keys(self):
+        """ロックで最後に記録した構成（無ければ空）"""
+        keys, _ok = QgsProject.instance().readListEntry(PROJECT_SCOPE, PROJECT_LOCKED_KEY, [])
+        return list(keys)
+
+    def _set_checked_keys(self, keys):
+        wanted = set(keys)
+        # 塗り直しは呼んだ側で1回だけ
+        self._updating_tree = True
+        try:
+            for leaf in self._leaves():
+                is_checked = "{0}:{1}".format(*leaf.data(0, ROLE)) in wanted
+                leaf.setCheckState(0, Qt.CheckState.Checked if is_checked else Qt.CheckState.Unchecked)
+        finally:
+            self._updating_tree = False
+
+    def _restore_locked(self):
+        keys = self._locked_keys()
+        if not keys:
+            return
+        answer = QMessageBox.question(
+            self, self.windowTitle(), tr(
+                "Returns the checks of \"Data to use\" to the configuration last recorded by the lock.\n"
+                "The current checks are not kept. The lock stays off.",
+                "使用データのチェックを、ロックで最後に記録した構成に戻します。\n"
+                "今のチェックは残りません。ロックは外れたままです。"),
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Ok)
+        if answer != QMessageBox.StandardButton.Ok:
+            return
+        self._set_checked_keys(keys)
+        self._fill_table()
+        self._update_summary()
+        self._draw_status()
+
+    def _update_lock_ui(self):
+        """ロック中は、使用データのチェックと「すべて選ぶ」「すべて外す」を押せなくする（木は送れるまま）"""
+        locked = self._is_locked()
+        self.lockButton.setText(tr("Locked", "ロック中") if locked else tr("Lock", "ロック"))
+        running = getattr(self, "_fetch_thread", None) is not None
+        for button in self._select_buttons:
+            button.setEnabled(not locked and not running)
+        # 復元はロックを外しているときだけ（ロック中はすでに記録した構成）。記録が無ければ押せない
+        self.restoreButton.setEnabled(not locked and not running and bool(self._locked_keys()))
+        flag = Qt.ItemFlag.ItemIsEnabled
+        self._updating_tree = True
+        try:
+            for root in (self._fgd_root, self._bv_root):
+                stack = [root]
+                while stack:
+                    node = stack.pop()
+                    node.setFlags(node.flags() & ~flag if locked else node.flags() | flag)
+                    stack.extend(node.child(i) for i in range(node.childCount()))
+        finally:
+            self._updating_tree = False
 
     def _on_tree_changed(self, item, _column):
         # 同じ地物の一方に印を付けたら、もう一方を外す（親をまとめて選んだときも子ごとに呼ばれる）
@@ -622,8 +858,8 @@ class FgdGpkgDialog(QDialog):
 
     def _forget_credentials(self):
         answer = QMessageBox.question(self, self.windowTitle(), tr(
-            "Delete the login ID and password saved for this plugin?\n(Those saved for Morizon Next are kept.)",
-            "このプラグインに保存したログインID・パスワードを消しますか？\n（Morizon Next に保存したものは消えません）"))
+            "Delete the login ID and password saved for this plugin?",
+            "このプラグインに保存したログインID・パスワードを消しますか？"))
         if answer == QMessageBox.StandardButton.Yes:
             CredentialsManager().clear()
             self._update_login_state()
@@ -637,10 +873,18 @@ class FgdGpkgDialog(QDialog):
             self.canvas.destinationCrsChanged.connect(self._update_meshes)
             self._canvas_connected = True
         self._open = True
+        if not self._fitted:
+            # 初めて表示したときだけ、部品が入りきる最小の大きさにする（以後は利用者が変えた大きさのまま）
+            self._fitted = True
+            QTimer.singleShot(0, self._fit_minimum)
+        # 保存先はプロジェクトに記録したもの（無ければプロジェクトの隣の既定の場所）
+        self._resolve_project_path()
         # 窓を先に出す。プレビュー地図は出たあとに置き、保存先の記録は別スレッドで読む（読み終わったら描き直す）
         QTimer.singleShot(0, self._sync_preview)
         self._invalidate_stored()
         self._update_meshes(force=True)
+        # 保存先が前回から変わっていなければ前回の結果がすぐ使えるので、ここで塗る（読み直すときは読み終えてから）
+        self._draw_status()
         self._update_size()
 
     def hideEvent(self, event):
@@ -774,7 +1018,8 @@ class FgdGpkgDialog(QDialog):
         読むのは別スレッド（StoredThread）。読み終わるまでは空を返し、読み終わったら表・見込み・地図を描き直す"""
         if self._stored_cache is None:
             self._load_stored()
-            return {"fgd": {}, "bv": {}}
+            if self._stored_cache is None:
+                return {"fgd": {}, "bv": {}}
         return self._stored_cache
 
     def _stored_loading(self):
@@ -782,7 +1027,13 @@ class FgdGpkgDialog(QDialog):
 
     def _load_stored(self):
         if self._stored_thread is not None:
-            self._stored_again = True
+            # 読んでいる途中。読み直しが要るのは保存先が変わった・書き込んだとき（_invalidate_stored）だけ。
+            # 読み終わるのを待つ間に記録を求められても、もう一度読むことはしない（1回開くたびに2回読んでいた）
+            return
+        # 保存先が前回読んだときから変わっていなければ（更新日時と大きさが同じなら）、前回の結果を使う
+        key = _file_key(self._path())
+        if key is not None and self._stored_last is not None and self._stored_last[0] == key:
+            self._stored_cache = self._stored_last[1]
             return
         self._begin_activity("stored", 1)
         self._stored_thread = StoredThread(self._path())
@@ -799,6 +1050,8 @@ class FgdGpkgDialog(QDialog):
             self._load_stored()
             return
         self._stored_cache = thread.results
+        # 読み終えた時点のファイルの状態を覚える（前の版の記録にメッシュ番号を足したときはファイルが変わっている）
+        self._stored_last = (_file_key(thread.path), thread.results)
         self._end_activity("stored")
         self._fill_table()
         self._update_summary()
@@ -906,7 +1159,7 @@ class FgdGpkgDialog(QDialog):
         if kind == "stored":
             return (tr("Reading the GeoPackage…", "保存先を読んでいます…"),
                     tr("GeoPackage %v / %m records", "保存先 %v / %m 件"))
-        return (tr("Querying the latest status (no login needed)…", "最新の状況を問い合わせています（ログイン不要）…"),
+        return (tr("Querying the latest status…", "最新の状況を問い合わせています…"),
                 tr("Latest status %v / %m meshes", "最新の状況 %v / %m メッシュ"))
 
     def _begin_activity(self, kind, total):
@@ -1067,11 +1320,35 @@ class FgdGpkgDialog(QDialog):
         finally:
             self.table.setUpdatesEnabled(True)
         self.table.resizeColumnsToContents()
-        header_view.setStretchLastSection(True)
+        self._content_widths = [self.table.columnWidth(c) for c in range(self.table.columnCount())]
+        self._fit_columns()
         for column, type_info in enumerate(FGD_TYPES, start=1):
             header = self.table.horizontalHeaderItem(column)
             header.setForeground(QBrush(QColor("black") if type_info["code"] in checked_types else COLOR_GRAY_TEXT))
         self.table.resizeRowsToContents()
+
+    def _fit_columns(self):
+        """中身に合わせた幅に、表の余りを全部の欄へ均等に足す。余りが無ければ中身に合わせた幅のまま（横に送る）"""
+        widths = self._content_widths
+        if not widths or len(widths) != self.table.columnCount():
+            return
+        spare = self.table.viewport().width() - sum(widths)
+        extra, rest = divmod(max(spare, 0), len(widths))
+        for column, width in enumerate(widths):
+            # 割り切れない分は前の欄から1つずつ足し、右端までぴったり埋める
+            self.table.setColumnWidth(column, width + extra + (1 if column < rest else 0))
+
+    def eventFilter(self, watched, event):
+        # 表の中の表示部分の幅が変わったら（窓の大きさ・分割・縦のスクロールバーの出入り）、余りを配り直す
+        # 窓を組み立てている途中にも届くので、まだ作っていない部品は見ない
+        table = getattr(self, "table", None)
+        bar = getattr(self, "progressBar", None)
+        if table is not None and watched is table.viewport() and event.type() == QEvent.Type.Resize:
+            self._fit_columns()
+        # 進捗バーが出ている間は地図の凡例を隠し、隠れたら凡例を出す（同じ段を入れ替える）
+        if bar is not None and watched is bar and event.type() in (QEvent.Type.Show, QEvent.Type.Hide):
+            self.mapLegend.setVisible(event.type() == QEvent.Type.Hide)
+        return super().eventFilter(watched, event)
 
     def _fill_rows(self, meshes, latest, stored, checked_types, stored_label, listed):
         self.table.setRowCount(len(meshes))
@@ -1173,11 +1450,15 @@ class FgdGpkgDialog(QDialog):
                 lines.append(tr("Optimized vector tiles: {0}.", "最適化ベクトルタイル：{0} 枚。").format(tile_count))
         # 押せないときは、その理由を見込みの欄に出す
         reason = ""
-        if self._stored_loading():
+        if not self._project_saved():
+            # 保存先はプロジェクトの隣に作るので、先にプロジェクトを保存してもらう
+            reason = tr("Save the project first. The GeoPackage is created in a folder next to the project file.",
+                        "先にプロジェクトを保存してください。GeoPackage はプロジェクトの隣のフォルダに作ります。")
+        elif self._stored_loading():
             # 読む前の空の記録で見込みを出さない
             reason = tr("Reading the GeoPackage…", "保存先を読んでいます…")
         elif not fgd_layers and not self._checked_bv_items():
-            reason = tr("Check the contents to fetch.", "取得する内容にチェックを入れてください。")
+            reason = tr("Check the data to use.", "使用データにチェックを入れてください。")
         elif not meshes:
             reason = self.meshLabel.text()
         elif not self._path():
@@ -1200,22 +1481,102 @@ class FgdGpkgDialog(QDialog):
         return path
 
     def _choose_path(self):
+        """保存先を選ぶ（別の場所の GeoPackage を使う・別の名前にする）。選んだらプロジェクトに記録する。選んだら True"""
+        start = self._path() or self._default_project_path() or os.path.expanduser("~")
         path, _filter = QFileDialog.getSaveFileName(
-            self, tr("GeoPackage to save to", "保存先の GeoPackage"), self.pathEdit.text(), "GeoPackage (*.gpkg)",
+            self, tr("GeoPackage to save to", "保存先の GeoPackage"), start, "GeoPackage (*.gpkg)",
             options=QFileDialog.Option.DontConfirmOverwrite,
         )
-        if path:
-            if not path.lower().endswith(".gpkg"):
-                path += ".gpkg"
-            self.pathEdit.setText(path)
-            self._on_path_changed()
+        if not path:
+            return False
+        if not path.lower().endswith(".gpkg"):
+            path += ".gpkg"
+        self.pathEdit.setText(path)
+        self._on_path_changed()
+        return True
 
     def _on_path_changed(self):
+        """利用者が保存先を変えた（入力・選択）。プロジェクトに記録して読み直す"""
+        self._record_path(self._path())
+        self._refresh_for_path()
+
+    def _refresh_for_path(self):
         self._invalidate_stored()
         self._fill_table()
         self._update_summary()
         self._draw_status()
         self._update_size()
+
+    # ---- 保存先（プロジェクトごと） ----
+    #
+    # プロジェクトと同じ階層のフォルダ（DATA_DIR_NAME）の GeoPackage（DATA_FILE_NAME）を基本にし、使う保存先は
+    # プロジェクトファイルに記録する（プロジェクトの中なら相対パスになり、フォルダごと移しても切れない）。
+    # 既定の場所にすでにデータがあれば、共有データとして使うかを聞く。別の場所の GeoPackage も選べる。
+
+    def _project_saved(self):
+        return bool(QgsProject.instance().fileName())
+
+    def _default_project_path(self):
+        if not self._project_saved():
+            return ""
+        return os.path.join(QgsProject.instance().absolutePath(), DATA_DIR_NAME, DATA_FILE_NAME)
+
+    def _recorded_path(self):
+        value, _ok = QgsProject.instance().readEntry(PROJECT_SCOPE, PROJECT_KEY, "")
+        return QgsProject.instance().pathResolver().readPath(value) if value else ""
+
+    def _record_path(self, path):
+        project = QgsProject.instance()
+        if not path or not self._project_saved():
+            return
+        stored = project.pathResolver().writePath(path)
+        old, _ok = project.readEntry(PROJECT_SCOPE, PROJECT_KEY, "")
+        if old != stored:
+            project.writeEntry(PROJECT_SCOPE, PROJECT_KEY, stored)
+
+    def _apply_path(self, path):
+        """保存先の欄を変える（プロジェクトには記録しない）"""
+        self.pathEdit.setPlaceholderText(
+            "" if self._project_saved() else tr("Save the project first; the GeoPackage is created next to it.",
+                                                "プロジェクトを保存すると、その隣に作ります。"))
+        if self.pathEdit.text() != path:
+            self.pathEdit.setText(path)
+            self._refresh_for_path()
+
+    def _resolve_project_path(self, *_args):
+        """今のプロジェクトの保存先を欄に入れる。記録が無ければプロジェクトの隣の既定の場所にし、
+        そこにすでにデータがあれば、共有データとして使うかを聞く（窓を開いたあとに）"""
+        if not self._open:
+            return
+        self._apply_project_lock()
+        recorded = self._recorded_path()
+        if recorded:
+            self._apply_path(recorded)
+            return
+        default = self._default_project_path()
+        self._apply_path(default)
+        if default and os.path.exists(default):
+            QTimer.singleShot(0, self._ask_shared)
+
+    def _ask_shared(self):
+        path = self._path()
+        if self._asking_shared or not self._open or not path or not os.path.exists(path) or self._recorded_path():
+            return
+        self._asking_shared = True
+        try:
+            answer = QMessageBox.question(self, self.windowTitle(), tr(
+                "There is existing data:\n{0}\n\nUse it as shared data?",
+                "既存のデータがあります：\n{0}\n\n共有データとして使用しますか？").format(path))
+            if answer == QMessageBox.StandardButton.Yes:
+                self._record_path(path)
+                return
+            QMessageBox.information(self, self.windowTitle(), tr(
+                "Set another location, or another name.", "場所を設定するか、別の名前を設定してください。"))
+            if not self._choose_path():
+                # 選ばなかったときは、既存のデータへ書き込まないよう欄を空にする（取得の前に指定してもらう）
+                self._apply_path("")
+        finally:
+            self._asking_shared = False
 
     def _update_size(self):
         """保存先の GeoPackage の大きさ。書き込み途中の分（-wal）があれば足す"""
@@ -1232,7 +1593,7 @@ class FgdGpkgDialog(QDialog):
 
     def _save_settings(self):
         settings = QSettings()
-        settings.setValue(SETTINGS + "gpkg_path", self.pathEdit.text().strip())
+        # 保存先はプロジェクトに記録する（_record_path）ので、ここでは覚えない
         settings.setValue(SETTINGS + "group_name", self.groupEdit.text().strip())
         settings.setValue(SETTINGS + "skip_current", self.skipCheckbox.isChecked())
         settings.setValue(SETTINGS + "place_layers", self.placeCheckbox.isChecked())
@@ -1249,11 +1610,16 @@ class FgdGpkgDialog(QDialog):
         fgd_layers = self._checked_fgd_layers()
         bv_items = self._checked_bv_items()
         if not fgd_layers and not bv_items:
-            QMessageBox.information(self, self.windowTitle(), tr("Check the contents to fetch.",
-                                                                 "取得する内容にチェックを入れてください。"))
+            QMessageBox.information(self, self.windowTitle(), tr("Check the data to use.",
+                                                                 "使用データにチェックを入れてください。"))
             return
         if not self._meshes:
             QMessageBox.information(self, self.windowTitle(), self.meshLabel.text())
+            return
+        if not self._project_saved():
+            QMessageBox.information(self, self.windowTitle(), tr(
+                "Save the project first. The GeoPackage is created in a folder next to the project file.",
+                "先にプロジェクトを保存してください。GeoPackage はプロジェクトの隣のフォルダに作ります。"))
             return
         path = self._path()
         if not path:
@@ -1262,10 +1628,15 @@ class FgdGpkgDialog(QDialog):
             return
         folder = os.path.dirname(os.path.abspath(path))
         if not os.path.isdir(folder):
-            QMessageBox.warning(self, self.windowTitle(), tr("The folder to save to does not exist:\n{0}",
-                                                             "保存先のフォルダがありません：\n{0}").format(folder))
-            return
+            if os.path.abspath(path) == os.path.abspath(self._default_project_path()):
+                # プロジェクトの隣のフォルダは、最初に取得するときに作る
+                os.makedirs(folder, exist_ok=True)
+            else:
+                QMessageBox.warning(self, self.windowTitle(), tr("The folder to save to does not exist:\n{0}",
+                                                                 "保存先のフォルダがありません：\n{0}").format(folder))
+                return
         self.pathEdit.setText(path)
+        self._record_path(path)
         listing = self._listing_for_current()
         plan = None
         if fgd_layers and listing is not None:
@@ -1289,7 +1660,6 @@ class FgdGpkgDialog(QDialog):
             answer = QMessageBox.question(self, self.windowTitle(), "\n".join(lines))
             if answer != QMessageBox.StandardButton.Yes:
                 return
-        # ダウンロードがあると分かっていて、まだログインしていなければ先にログインする
         if plan and self.session is None and not self._login():
             return
         self._save_settings()
@@ -1310,13 +1680,17 @@ class FgdGpkgDialog(QDialog):
         thread.start()
 
     def _set_running(self, running):
-        for widget in (self.tree, self.pathEdit, self.pathButton, self.groupEdit, self.skipCheckbox,
-                       self.placeCheckbox, self.placeButton, self.placeScope, self.listButton, self.loginButton,
+        for widget in (self.tree, self.lockButton, self.pathEdit, self.pathButton, self.groupEdit, self.skipCheckbox,
+                       self.placeCheckbox, self.listButton, self.loginButton,
                        self.logoutButton, self.forgetButton, self.languageButton):
             widget.setEnabled(not running)
         if not running:
             self._update_login_state()
-        self.fetchButton.setVisible(not running)
+        # すべて選ぶ・すべて外すは、取得中とロック中は押せない
+        self._update_lock_ui()
+        # 取得中は 取得／レイヤーへ配置／配置する範囲 の3段を隠し、中止だけを一番下の段に出す。終わったら戻す
+        for widget in (self.fetchButton, self.placeButton, self.placeScope):
+            widget.setVisible(not running)
         self.cancelButton.setVisible(running)
         self.cancelButton.setEnabled(True)
         self.cancelButton.setText(tr("Stop", "中止"))
@@ -1407,9 +1781,11 @@ class FgdGpkgDialog(QDialog):
             if self._login():
                 # 取り込み終えたメッシュは保存の記録から飛ばされるので、同じ範囲で始め直せばよい
                 self._run_fetch(path, fgd_layers, bv_items, meshes)
-            return
+                return
 
-        self._set_stage("\n".join(thread.summary)
+        summary = self._summary_before + thread.summary
+        self._summary_before = []
+        self._set_stage("\n".join(summary)
                         or (tr("Stopped.", "中止しました。") if thread.is_stopping() else ""))
         if thread.error:
             self._log(tr("Stopped: ", "止まりました：") + thread.error)
@@ -1423,11 +1799,49 @@ class FgdGpkgDialog(QDialog):
             self._close_after_fetch = False
             self.close()
             return
+        if thread.bv_failed and not thread.error and not thread.is_stopping() and self._swap_to_fgd(thread.bv_failed):
+            # 付け替えた基盤地図情報を、同じ範囲で取得する（最適化ベクトルタイルは開けないので取りに行かない）。
+            # 今回の結果は、付け替えて取得した結果の前に残す
+            self._run_fetch(path, self._checked_fgd_layers(), [], meshes)
+            self._summary_before = list(thread.summary)
+            return
         if self.placeCheckbox.isChecked() and not thread.error:
             self._place_layers(self._fetch_meshes)
         self._fill_table()
         self._update_summary()
         self._draw_status()
+
+    def _swap_to_fgd(self, failed_items):
+        """最適化ベクトルタイルを開けなかったとき、基盤地図情報にも同じ地物がある項目（⇄）のチェックを
+        基盤地図情報へ付け替える。ロック中でも付け替える（ロックの記録は変えない）。付け替えたら True"""
+        swaps = []
+        for item in failed_items:
+            leaf = self._leaf_by_key.get(("bv", item["source_layer"]))
+            other = self._counterpart(("bv", item["source_layer"]))
+            if leaf is not None and other is not None and leaf.checkState(0) == Qt.CheckState.Checked:
+                swaps.append((item, other))
+        if not swaps:
+            return False
+        QMessageBox.information(self, self.windowTitle(), tr(
+            "The optimized vector tiles could not be opened.\n"
+            "Some checked items also exist in the Fundamental Geospatial Data (⇄), so the checks are moved there "
+            "and they are fetched:\n{0}",
+            "最適化ベクトルタイルを開けませんでした。\n"
+            "基盤地図情報と排他的なチェック（⇄）があるので、基盤地図情報に付け替えて取得します：\n{0}",
+        ).format(tr(", ", "、").join(fgd_layer_name(other.data(0, ROLE)[1]) for _item, other in swaps)))
+        # 印を付けると、もう一方（最適化ベクトルタイル）は _on_tree_changed で外れる
+        self._updating_tree = True
+        try:
+            for _item, other in swaps:
+                other.setCheckState(0, Qt.CheckState.Checked)
+        finally:
+            self._updating_tree = False
+        self._log(tr("Moved the checks to the Fundamental Geospatial Data: ", "基盤地図情報に付け替えました：")
+                  + tr(", ", "、").join(fgd_layer_name(other.data(0, ROLE)[1]) for _item, other in swaps))
+        self._fill_table()
+        self._update_summary()
+        self._draw_status()
+        return True
 
     def _place_layers(self, fetched_meshes=None):
         path = self._path()
@@ -1447,7 +1861,26 @@ class FgdGpkgDialog(QDialog):
             meshes = list(self._meshes)
         codes = [code for codes in self._checked_fgd_layers().values() for code in codes]
         group_name = self.groupEdit.text().strip() or default_group_name()
-        placed = store.place_layers(path, group_name, codes, self._checked_bv_items(), meshes)
+        # 配置は画面の処理と同じ流れで動き、その間は窓が止まって見えるので、手前に知らせを出しておき、
+        # 終わったら閉じる（出したあと一度画面を描かせてから始める）
+        notice = QProgressDialog(tr("Updating the layers…", "レイヤーを更新しています…"), "", 0, 0, self)
+        notice.setWindowTitle(self.windowTitle())
+        notice.setCancelButton(None)
+        notice.setMinimumDuration(0)
+        notice.setWindowModality(Qt.WindowModality.WindowModal)
+        notice.setMinimumWidth(360)
+        notice.show()
+        # 窓が画面に出て中身が描かれるまで、少しの間だけ画面の処理を回す（一度だけでは、Flatpak・Wayland などで
+        # 中身の無い小さな窓のまま配置の処理に入ってしまった）
+        shown_at = time.monotonic()
+        while time.monotonic() - shown_at < NOTICE_SETTLE:
+            QApplication.processEvents()
+            time.sleep(0.01)
+        try:
+            placed = store.place_layers(path, group_name, codes, self._checked_bv_items(), meshes)
+        finally:
+            notice.close()
+            notice.deleteLater()
         if placed:
             self._log(tr("Placed layers: ", "レイヤーへ配置しました：") + tr(", ", "、").join(placed))
         else:
@@ -1457,8 +1890,30 @@ class FgdGpkgDialog(QDialog):
     # ================= 記録 =================
 
     def _toggle_log(self, shown):
+        # 記録を開くときは、ほかの区域を狭めずに記録の分だけ窓の高さを伸ばし、閉じたら縮める
+        if shown == self.logEdit.isVisible():
+            return
+        # 基準は出す・隠す前の高さ（出した時点で窓の最小が上がり、窓が先に伸びることがあるため）
+        before = self.height()
+        min_before = self.minimumSizeHint().height()
         self.logEdit.setVisible(shown)
         self.logToggle.setArrowType(Qt.ArrowType.DownArrow if shown else Qt.ArrowType.RightArrow)
+        if self.isMaximized() or self.isFullScreen():
+            return
+        if shown:
+            # 伸ばす量は、記録を出す前と後の窓の最小の高さの差（記録の欄と、その上下の間隔の分）。閉じるときに使う
+            self.layout().activate()
+            self._log_delta = max(self.minimumSizeHint().height() - min_before, 0)
+            self.resize(self.width(), before + self._log_delta)
+        else:
+            # 隠した直後は窓の最小がまだ古く縮められないので、決め直されたあとで、開いたときに伸ばした分だけ縮める
+            QTimer.singleShot(0, lambda: self._shrink_after_log(before - self._log_delta))
+
+    def _shrink_after_log(self, height):
+        # 窓の並びを決め直してから（決め直す前は最小がまだ記録のある高さのままで縮まらなかった）縮める
+        self.layout().invalidate()
+        self.layout().activate()
+        self.resize(self.width(), max(height, self.minimumSizeHint().height()))
 
     def _log(self, message):
         self.logEdit.appendPlainText(message)
@@ -1514,6 +1969,12 @@ class FgdGpkgDialog(QDialog):
 
     def cleanup(self):
         self._listTimer.stop()
+        project = QgsProject.instance()
+        for signal in (project.readProject, project.fileNameChanged, project.cleared):
+            try:
+                signal.disconnect(self._resolve_project_path)
+            except TypeError:
+                pass
         for thread in (self._fetch_thread, self._list_thread):
             if thread is not None:
                 if hasattr(thread, "cancel"):
@@ -1535,12 +1996,54 @@ class FgdGpkgDialog(QDialog):
         self.statusRubbers = {}
 
 
+def _legend_row(title, entries):
+    """凡例の1行（見出し、色の見本と説明の並び）。見出しが空なら付けない（表のすぐ下の凡例）"""
+    row = QHBoxLayout()
+    title_label = QLabel(title)
+    if title:
+        row.addWidget(title_label)
+    # 色の見本は文字の高さの正方形（文字の幅で決めると横長になった）
+    side = title_label.fontMetrics().height()
+    for color, text in entries:
+        swatch = QLabel()
+        swatch.setFixedSize(side, side)
+        swatch.setStyleSheet("background:rgba({0},{1},{2},{3}); border:1px solid #bbb;".format(
+            color.red(), color.green(), color.blue(), color.alpha()))
+        row.addWidget(swatch)
+        row.addWidget(QLabel(text))
+        row.addSpacing(8)
+    row.addStretch(1)
+    return row
+
+
+def _tint(button, color):
+    """標準のボタンの地の色をパレットで変える。押せないとき（Disabled）は標準の色のまま。
+    パレットを使わないテーマ（Windows の標準の見た目など）では色が出ないことがある"""
+    palette = button.palette()
+    for group in (QPalette.ColorGroup.Active, QPalette.ColorGroup.Inactive):
+        palette.setColor(group, QPalette.ColorRole.Button, QColor(color))
+        palette.setColor(group, QPalette.ColorRole.ButtonText, QColor("white"))
+    button.setPalette(palette)
+
+
 def _mark_exclusive(leaf, other_name):
     leaf.setText(0, leaf.text(0) + " ⇄")
     tip = leaf.toolTip(0)
     note = tr("Same features as {0}. Only one of the two can be selected.",
               "{0}と同じ地物です。どちらか一方だけを選べます。").format(other_name)
     leaf.setToolTip(0, note + ("\n" + tip if tip else ""))
+
+
+def _file_key(path):
+    """保存先のファイルの状態（更新日時と大きさ）。書き込み途中の分（-wal）も含める。ファイルが無ければ None"""
+    if not path or not os.path.exists(path):
+        return None
+    key = [os.path.abspath(path)]
+    for name in (path, path + "-wal"):
+        if os.path.exists(name):
+            stat = os.stat(name)
+            key.extend([stat.st_mtime_ns, stat.st_size])
+    return tuple(key)
 
 
 def _short_date(date):

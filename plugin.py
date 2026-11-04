@@ -9,7 +9,7 @@ from .i18n import tr
 
 
 class FgdGpkgBuilder:
-    """基盤地図情報（要ログイン）と最適化ベクトルタイル（ログイン不要）を取得し、1つの GeoPackage にまとめる"""
+    """基盤地図情報と最適化ベクトルタイルを取得し、1つの GeoPackage にまとめる"""
 
     MENU = "fgd_gpkg_builder"
 

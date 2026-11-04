@@ -24,7 +24,7 @@ from .catalog import (
 )
 from . import fgd_api
 from .i18n import tr
-from .tiles import tile_bounds_lonlat
+from .tiles import tile_bounds_lonlat, tile_center_lonlat
 
 STORE_EPSG = 6668
 MESH_TABLE = "fgd_meshes"
@@ -120,18 +120,25 @@ def _delete(ds, table, conditions):
         ds.ReleaseResultSet(result)
 
 
-def _select_first(ds, expressions, table, conditions=()):
-    """1行目の値のリスト。expressions は COUNT(*)・MIN(項目) などこのモジュールで決めた式だけ"""
+def _select_rows(ds, expressions, table, conditions=(), group_by=()):
+    """行ごとの値のリストのリスト。expressions は COUNT(*)・MIN(項目)・項目名などこのモジュールで決めた式だけ。
+    group_by は項目名（_ident で確かめる）"""
     where = " WHERE " + _condition(conditions) if conditions else ""
-    statement = "SELECT " + ", ".join(expressions) + " FROM " + _ident(table) + where  # nosec B608
+    group = " GROUP BY " + ", ".join(_ident(c) for c in group_by) if group_by else ""
+    statement = "SELECT " + ", ".join(expressions) + " FROM " + _ident(table) + where + group  # nosec B608
     result = ds.ExecuteSQL(statement)
-    values = None
+    rows = []
     if result is not None:
-        feature = result.GetNextFeature()
-        if feature is not None:
-            values = [feature.GetField(i) for i in range(len(expressions))]
+        for feature in result:
+            rows.append([feature.GetField(i) for i in range(len(expressions))])
         ds.ReleaseResultSet(result)
-    return values
+    return rows
+
+
+def _select_first(ds, expressions, table, conditions=()):
+    """1行目の値のリスト（集計の結果など）。無ければ None"""
+    rows = _select_rows(ds, expressions, table, conditions)
+    return rows[0] if rows else None
 
 
 def rtree_subset(table, rtree_where):
@@ -175,17 +182,15 @@ def stored_bv_tiles(path, source_layer, zoom):
     return tiles
 
 
-def record_counts(path):
-    """(基盤地図情報の取得の記録の行数, 最適化ベクトルタイルの取得の記録の行数)。読み込みの進み具合の分母にする"""
+def record_count(path):
+    """基盤地図情報の取得の記録の行数。読み込みの進み具合の分母にする"""
     ds = open_store(path, False)
     if ds is None:
-        return 0, 0
-    counts = []
-    for name in (MESH_TABLE, BV_TILES_TABLE):
-        layer = ds.GetLayerByName(name)
-        counts.append(layer.GetFeatureCount() if layer is not None else 0)
+        return 0
+    layer = ds.GetLayerByName(MESH_TABLE)
+    count = layer.GetFeatureCount() if layer is not None else 0
     ds = None
-    return tuple(counts)
+    return count
 
 
 def read_fgd_dates(path, progress_cb=None, every=2000):
@@ -204,33 +209,99 @@ def read_fgd_dates(path, progress_cb=None, every=2000):
     return dates
 
 
-def iter_bv_tiles(path, zoom):
-    """最適化ベクトルタイルの取得済みタイルを1行ずつ (source_layer, x, y) で返す"""
+def tile_mesh(x, y, zoom):
+    """タイルの中心が入る2次メッシュ（隣のメッシュと重ねて数えないよう、タイルは中心で1つのメッシュに数える）"""
+    lon, lat = tile_center_lonlat(x, y, zoom)
+    return fgd_api.latlon_to_mesh2(lat, lon)
+
+
+def missing_tile_meshes(path):
+    """最適化ベクトルタイルの取得の記録のうち、メッシュ番号（mesh_code）が入っていない行の数。
+    前の版で書いた記録には無い（項目ごと無いときは全部の行）"""
     ds = open_store(path, False)
     if ds is None:
+        return 0
+    layer = ds.GetLayerByName(BV_TILES_TABLE)
+    count = 0
+    if layer is not None:
+        if layer.GetLayerDefn().GetFieldIndex("mesh_code") < 0:
+            count = layer.GetFeatureCount()
+        else:
+            layer.SetAttributeFilter("mesh_code IS NULL")
+            count = layer.GetFeatureCount()
+    ds = None
+    return count
+
+
+def fill_tile_meshes(path, zoom):
+    """前の版で書いた最適化ベクトルタイルの取得の記録に、メッシュ番号を足す（一度だけ。以後は書き込むときに入る）。
+
+    2次メッシュの番号は「行（緯度）の部分＝タイルの y だけで決まる」と「列（経度）の部分＝タイルの x だけで
+    決まる」に分かれるので、x・y の値ごとの対応を作り、UPDATE 1本で埋める（1行ずつ書き戻すと遅かった）"""
+    ds = open_store(path, True)
+    layer = ds.GetLayerByName(BV_TILES_TABLE)
+    if layer is None:
+        ds = None
         return
-    layer = ds.GetLayerByName(BV_TILES_TABLE)
-    if layer is not None:
-        layer.SetAttributeFilter("tile_z = {0}".format(int(zoom)))
-        for feature in layer:
-            yield feature.GetField("source_layer"), feature.GetField("tile_x"), feature.GetField("tile_y")
+    if layer.GetLayerDefn().GetFieldIndex("mesh_code") < 0:
+        layer.CreateField(_new_field("mesh_code", ogr.OFTString))
+    xs = [r[0] for r in _select_rows(ds, ["tile_x"], BV_TILES_TABLE, [("tile_z", int(zoom))], group_by=["tile_x"])]
+    ys = [r[0] for r in _select_rows(ds, ["tile_y"], BV_TILES_TABLE, [("tile_z", int(zoom))], group_by=["tile_y"])]
+    if not xs or not ys:
+        ds = None
+        return
+    # メッシュ番号 PPUUQV：PP・Q は緯度（y）、UU・V は経度（x）から決まる。もう一方は何でもよいので代わりの値で求める
+    x_code = {x: tile_mesh(x, ys[0], zoom) for x in xs}
+    y_code = {y: tile_mesh(xs[0], y, zoom) for y in ys}
+    pp = _case("tile_y", {y: code[0:2] for y, code in y_code.items()})
+    q = _case("tile_y", {y: code[4] for y, code in y_code.items()})
+    uu = _case("tile_x", {x: code[2:4] for x, code in x_code.items()})
+    v = _case("tile_x", {x: code[5] for x, code in x_code.items()})
+    _update_mesh_codes(ds, " || ".join((pp, uu, q, v)), int(zoom))
     ds = None
 
 
-def stored_bv_tile_sets(path, zoom):
-    """{source_layer: {(x, y), ...}}。最適化ベクトルタイルの項目ごとの取得済みタイル"""
+def _ensure_index(ds, table, columns):
+    """表に索引が無ければ作る（あれば何もしない）。表が無いときも何もしない。取り込みのまとまりの外で呼ぶ"""
+    if ds.GetLayerByName(table) is None:
+        return
+    name = _ident("idx_{0}_{1}".format(table, "_".join(columns)))
+    statement = "CREATE INDEX IF NOT EXISTS " + name + " ON " + _ident(table) + " (" + ", ".join(
+        _ident(c) for c in columns) + ")"
+    result = ds.ExecuteSQL(statement)
+    if result is not None:
+        ds.ReleaseResultSet(result)
+
+
+def _case(column, values):
+    """CASE 項目 WHEN 数 THEN '文字' ... END。値はこのモジュールで求めた数字の文字だけ"""
+    whens = " ".join("WHEN {0} THEN {1}".format(int(k), _quote(v)) for k, v in values.items())
+    return "(CASE " + _ident(column) + " " + whens + " END)"
+
+
+def _update_mesh_codes(ds, expression, zoom):
+    # expression は _case で作った式だけ（表・項目の名前は _ident、値は int と _quote で入れてある）
+    statement = ("UPDATE " + _ident(BV_TILES_TABLE) + " SET " + _ident("mesh_code") + " = " + expression  # nosec B608
+                 + " WHERE " + _ident("mesh_code") + " IS NULL AND " + _condition([("tile_z", zoom)]))
+    result = ds.ExecuteSQL(statement)
+    if result is not None:
+        ds.ReleaseResultSet(result)
+
+
+def bv_mesh_counts(path, zoom):
+    """{source_layer: {メッシュ: タイル数}}。最適化ベクトルタイルの項目・メッシュごとの取得済みタイルの数。
+    数えるのは GeoPackage（SQLite）に任せ、返ってくるのは項目×メッシュの行だけにする"""
     ds = open_store(path, False)
-    if ds is None:
+    if ds is None or ds.GetLayerByName(BV_TILES_TABLE) is None:
         return {}
-    layer = ds.GetLayerByName(BV_TILES_TABLE)
-    tiles = {}
-    if layer is not None:
-        layer.SetAttributeFilter("tile_z = {0}".format(int(zoom)))
-        for feature in layer:
-            tiles.setdefault(feature.GetField("source_layer"), set()).add(
-                (feature.GetField("tile_x"), feature.GetField("tile_y")))
+    rows = _select_rows(ds, ["source_layer", "mesh_code", "COUNT(*)"], BV_TILES_TABLE,
+                        [("tile_z", int(zoom))], group_by=["source_layer", "mesh_code"])
     ds = None
-    return tiles
+    counts = {}
+    for name, mesh, count in rows:
+        if mesh:
+            counts.setdefault(name, {})[mesh] = count
+    return counts
 
 
 def bv_date_range(path, source_layer):
@@ -432,11 +503,17 @@ def _ensure_bv_tables(out, items):
             if defn.GetFieldIndex(name) < 0:
                 layer.CreateField(_new_field(name, kind))
         layers[item["source_layer"]] = out.GetLayerByName(bv_table(item))
-    _ensure_table(out, BV_TILES_TABLE, ogr.wkbPolygon, [
+    tile_fields = [
         ("source_layer", ogr.OFTString), ("tile_z", ogr.OFTInteger), ("tile_x", ogr.OFTInteger),
         ("tile_y", ogr.OFTInteger), ("feature_count", ogr.OFTInteger),
         ("fetched_at", ogr.OFTString), ("source_date", ogr.OFTString),
-    ])
+        # タイルの中心が入る2次メッシュ。読むときにメッシュごとの数を SQLite で数えるために持つ
+        ("mesh_code", ogr.OFTString),
+    ]
+    tiles_layer = _ensure_table(out, BV_TILES_TABLE, ogr.wkbPolygon, tile_fields)
+    if tiles_layer.GetLayerDefn().GetFieldIndex("mesh_code") < 0:
+        # 前の版で作った表には無いので足す（前の行は、読むとき fill_tile_meshes で一度だけ埋める）
+        tiles_layer.CreateField(_new_field("mesh_code", ogr.OFTString))
     return layers
 
 
@@ -486,6 +563,7 @@ def _write_bv_tiles(out, layers, items, zoom, results, fetched_at, source_date, 
             tile.SetField("feature_count", len(rows))
             tile.SetField("fetched_at", fetched_at)
             tile.SetField("source_date", source_date)
+            tile.SetField("mesh_code", tile_mesh(x, y, zoom))
             tiles_layer.CreateFeature(tile)
     return counts
 
@@ -515,6 +593,15 @@ def write_block(path, mesh, fgd_entries, absent_types, bv_items, zoom, bv_result
                     _ensure_fgd_table(out, code, ds.GetLayer(i))
         _ensure_mesh_table(out)
         bv_layers = _ensure_bv_tables(out, bv_items) if bv_items and bv_results else {}
+        # 前の分を消す条件の項目に索引を作る（無いと消すたびに表全体を見ていて、取り込んだ量が増えるほど遅くなった）
+        _ensure_index(out, MESH_TABLE, ["mesh_code", "type_code"])
+        for entry in fgd_entries:
+            for code in entry["layer_codes"]:
+                _ensure_index(out, code, ["mesh_code"])
+        if bv_layers:
+            for item in bv_items:
+                _ensure_index(out, bv_table(item), ["tile_z", "tile_x", "tile_y"])
+            _ensure_index(out, BV_TILES_TABLE, ["source_layer", "tile_z", "tile_x", "tile_y"])
 
         fgd_counts = {}
         bv_counts = {}

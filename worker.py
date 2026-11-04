@@ -13,9 +13,10 @@ from qgis.PyQt.QtCore import QThread, pyqtSignal
 from . import fgd_api, store
 from .catalog import BV_SOURCE_URL, BV_ZOOM, FGD_TYPE_BY_CODE, FGD_TYPES, fgd_type_name
 from .i18n import tr
-from .tiles import tile_bounds_3857, tile_center_lonlat, tiles_for_bounds
+from .tiles import tile_bounds_3857, tiles_for_bounds
 
 BV_USER_AGENT = "QGIS fgd_gpkg_builder plugin"
+BV_CHUNK_SIZE = 262144
 # 一時的な調べもの用：取り込んだ基盤地図情報の ZIP を消さずに残す（行政区画界線・町字界線が入らない件）。
 # 残した場所は記録に出す。調べ終わったら False に戻す
 KEEP_FGD_ZIPS = False
@@ -45,9 +46,10 @@ class StoredThread(QThread):
     """保存先の取得の記録を読む（大きな GeoPackage では時間がかかるので、窓を開くのを待たせない）。
 
     results: {"fgd": {(mesh, type_code): data_date}, "bv": {source_layer: {メッシュ: タイル数}}}
-    最適化ベクトルタイルは、中心が入るメッシュに数える（隣のメッシュと重ねて数えない）"""
+    最適化ベクトルタイルは、中心が入るメッシュに数える（隣のメッシュと重ねて数えない）。数えるのは
+    GeoPackage（SQLite）に任せる。前の版で書いた記録にメッシュ番号が無ければ、最初に一度だけ足す"""
 
-    progress = pyqtSignal(int, int)  # 読んだ行数, 全体の行数（取得の記録の行）
+    progress = pyqtSignal(int, int)  # 済んだ行数, 全体の行数（取得の記録の行）
 
     EVERY = 2000  # 進み具合を送る行の間隔
 
@@ -60,18 +62,16 @@ class StoredThread(QThread):
         try:
             if not self.path or not os.path.exists(self.path):
                 return
-            fgd_rows, bv_rows = store.record_counts(self.path)
-            total = fgd_rows + bv_rows
+            fgd_rows = store.record_count(self.path)
+            missing = store.missing_tile_meshes(self.path)
+            # 進み具合：基盤地図情報の記録の行、前の版の記録にメッシュ番号を足す分（1）、メッシュごとに数える分（1）
+            total = fgd_rows + (1 if missing else 0) + 1
             self.progress.emit(0, total)
             fgd = store.read_fgd_dates(self.path, lambda n: self.progress.emit(n, total), self.EVERY)
-            bv = {}
-            for n, (name, x, y) in enumerate(store.iter_bv_tiles(self.path, BV_ZOOM), 1):
-                lon, lat = tile_center_lonlat(x, y, BV_ZOOM)
-                mesh = fgd_api.latlon_to_mesh2(lat, lon)
-                per_mesh = bv.setdefault(name, {})
-                per_mesh[mesh] = per_mesh.get(mesh, 0) + 1
-                if n % self.EVERY == 0:
-                    self.progress.emit(fgd_rows + n, total)
+            if missing:
+                store.fill_tile_meshes(self.path, BV_ZOOM)
+                self.progress.emit(fgd_rows + 1, total)
+            bv = store.bv_mesh_counts(self.path, BV_ZOOM)
             self.progress.emit(total, total)
             self.results = {"fgd": fgd, "bv": bv}
         except Exception:  # 壊れたファイルなどは「保存なし」として扱う
@@ -122,6 +122,7 @@ class FetchThread(QThread):
         self.bv_items = list(bv_items)
         self.skip_current = skip_current
         self.need_login = False
+        self.bv_failed = []  # 最適化ベクトルタイルを開けなかったとき、取得できなかった項目（公開終了など）
         self.error = ""
         self.summary = []
         self.done_meshes = []
@@ -155,14 +156,31 @@ class FetchThread(QThread):
             source_date = ""
             bv_stored = []
             if self.bv_items:
-                bv_ds, source_date = _open_bvmap()
+                try:
+                    bv_ds, source_date = _open_bvmap()
+                except RuntimeError as e:
+                    # 最適化ベクトルタイルは試験公開で、終わることもある。開けなければ、それを知らせて
+                    # 基盤地図情報だけで続ける（おまけのデータのために、基盤地図情報の取得を止めない）
+                    self.log.emit(str(e).strip())
+                    self.log.emit(tr("Continuing with the Fundamental Geospatial Data only.",
+                                     "基盤地図情報だけで取得を続けます。"))
+                    self.bv_failed = self.bv_items
+                    self.bv_items = []
+                    self.summary.append(tr(
+                        "The optimized vector tiles could not be opened, so they were not fetched.",
+                        "最適化ベクトルタイルを開けなかったため、取得していません。"))
+            if self.bv_items:
                 if self.skip_current and source_date:
                     # 同じ配信データから取ったタイルは取り直さない（項目ごとに確かめ、どれかが古ければ取る）
                     bv_stored = [store.stored_bv_tiles(self.path, i["source_layer"], BV_ZOOM) for i in self.bv_items]
             blocks = self._plan_blocks(fgd_plan, absent, bv_stored, source_date)
             if not blocks:
-                self.summary.append(tr("Everything stored is up to date. Nothing needs fetching.",
-                                       "保存済みのものがすべて最新でした。取得の必要なものはありません。"))
+                if not self.bv_failed:
+                    self.summary.append(tr("Everything stored is up to date. Nothing needs fetching.",
+                                           "保存済みのものがすべて最新でした。取得の必要なものはありません。"))
+                elif self.fgd_layers:
+                    self.summary.append(tr("The stored Fundamental Geospatial Data is up to date.",
+                                           "基盤地図情報は、保存済みのものがすべて最新でした。"))
                 return
             self._run_blocks(blocks, bv_ds, source_date)
         except InterruptedError:
@@ -356,6 +374,9 @@ def _open_bvmap():
         ("GDAL_HTTP_USERAGENT", BV_USER_AGENT),
         ("GDAL_HTTP_MAX_RETRY", "3"),
         ("GDAL_HTTP_RETRY_DELAY", "1"),
+        # 配信ファイルを取りに行く1回の大きさ（既定 16KB）。PMTiles は近くのタイルが近くに並ぶので、広げると
+        # 往復が減る。1メッシュ分で測ると 256KB が最も速かった（1MB は読まない分まで取りに行き遅くなった）
+        ("CPL_VSIL_CURL_CHUNK_SIZE", str(BV_CHUNK_SIZE)),
     ):
         gdal.SetThreadLocalConfigOption(key, value)
     url = "/vsicurl/" + BV_SOURCE_URL

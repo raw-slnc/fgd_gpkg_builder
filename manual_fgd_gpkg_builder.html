@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>G.S.I. and Fundamental GeoPackage Builder Manual</title>
+  <style>
+    :root {
+      --bg: #f4f7f1;
+      --panel: #fdfefb;
+      --ink: #2b302a;
+      --muted: #5c6b57;
+      --line: #d3e0cd;
+      --accent: #4a7c4e;
+      --accent-soft: #e8f0e8;
+      --note-line: #e6c800;
+      --note-bg: #fffbe6;
+      --view: #e67800;
+      --full: rgba(46, 157, 58, 0.30);
+      --part: rgba(240, 185, 0, 0.45);
+    }
+    body {
+      margin: 0;
+      font-family: "Noto Sans JP", "Yu Gothic", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.65;
+    }
+    main { max-width: 980px; margin: 0 auto; padding: 32px 20px 64px; }
+    header {
+      margin-bottom: 28px;
+      padding: 16px 4px 20px;
+      border-bottom: 2px solid var(--accent);
+      display: flex;
+      align-items: flex-start;
+      gap: 20px;
+    }
+    header .header-text { flex: 1; }
+    h1, h2, h3 { margin: 0 0 12px; line-height: 1.25; }
+    h1 { font-size: 2rem; color: #2d5a30; }
+    h2 { font-size: 1.35rem; padding-left: 12px; border-left: 4px solid var(--accent); color: #2d5a30; }
+    h3 { font-size: 1.02rem; margin-top: 22px; padding-top: 10px; border-top: 1px solid var(--line); }
+    section { margin-bottom: 2.5em; }
+    .muted { color: var(--muted); margin-top: 10px; }
+    .note {
+      padding: 10px 14px;
+      border-left: 3px solid var(--note-line);
+      background: var(--note-bg);
+      margin-top: 14px;
+    }
+    code {
+      padding: 0.14em 0.46em;
+      border-radius: 7px;
+      background: #eef3ea;
+      font-family: "Cascadia Code", "Consolas", monospace;
+      font-size: 0.95em;
+    }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.96rem; }
+    th, td { border: 1px solid var(--line); padding: 9px 10px; vertical-align: top; text-align: left; }
+    th { background: var(--accent-soft); width: 28%; }
+    ul, ol { margin: 10px 0 0 18px; padding: 0; }
+    li + li { margin-top: 4px; }
+    .lang-btn {
+      flex-shrink: 0;
+      padding: 6px 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #eef3ea;
+      cursor: pointer;
+      font-size: 0.9rem;
+      color: var(--ink);
+    }
+    .lang-btn:hover { background: var(--accent-soft); }
+
+    /* 考え方の3点 */
+    .points { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 14px; }
+    .point {
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel);
+    }
+    .point b { display: block; margin-bottom: 6px; color: #2d5a30; }
+
+    /* メッシュの図 */
+    .figure {
+      margin-top: 14px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #f7faf5;
+    }
+    .figure-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .figure-box { padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+    .figure-box h3 { margin: 0 0 8px; padding: 0; border: 0; font-size: 1rem; }
+    .mesh {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 0;
+      border: 1px solid #c9d3c4;
+      background: #fbfbf8;
+    }
+    .mesh span {
+      aspect-ratio: 1.5 / 1;
+      border: 1px solid #e3e8df;
+      box-sizing: border-box;
+    }
+    .mesh span.full { background: var(--full); }
+    .mesh span.part { background: var(--part); }
+    .mesh span.view { border: 2px solid var(--view); }
+    .legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 16px; margin-top: 12px; font-size: 0.92rem; color: var(--muted); }
+    .legend i {
+      display: inline-block;
+      width: 1em;
+      height: 1em;
+      margin-right: 6px;
+      vertical-align: -0.15em;
+      border: 1px solid #bbb;
+    }
+    .legend i.view { border: 2px solid var(--view); background: #fff; }
+    .legend i.full { background: var(--full); }
+    .legend i.part { background: var(--part); }
+    @media (max-width: 760px) {
+      .points, .figure-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="header-text">
+        <h1>G.S.I. and Fundamental GeoPackage Builder</h1>
+        <p class="muted" data-ja>Grid Sheet Importer and Fundamental GeoPackage Builder は国土地理院の基盤地図情報と最適化ベクトルタイルを、見ている地図の範囲だけ取得し、1つの GeoPackage にまとめる QGIS プラグインです。</p>
+        <p class="muted" data-en>Grid Sheet Importer and Fundamental GeoPackage Builder is a QGIS plugin that fetches the Fundamental Geospatial Data and the optimized vector tiles of the Geospatial Information Authority of Japan for the area you are looking at, and keeps them in one GeoPackage.</p>
+      </div>
+      <button class="lang-btn" onclick="toggleLang()">EN / 日本語</button>
+    </header>
+
+    <!-- ===== 日本語 ===== -->
+    <div id="content-ja">
+
+      <section>
+        <h2>1. 考え方</h2>
+        <div class="points">
+          <div class="point"><b>基本は、見ている地図の範囲</b>取得も表示も、地図に映っている範囲に掛かる2次メッシュ（約10km四方）が対象です。地図を動かせば、対象も変わります。</div>
+          <div class="point"><b>自分の作業範囲・必要なデータだけ</b>チェックした内容を、その範囲の分だけ取ります。取った分は保存先に残り、最新のものは取り直しません。</div>
+          <div class="point"><b>必要なら、取得済みの範囲すべて</b>配置する範囲を「取得済みの範囲すべて」にすれば、これまで保存した範囲を全部表示できます。</div>
+        </div>
+
+        <div class="figure">
+          <div class="figure-grid">
+            <div class="figure-box">
+              <h3>可視範囲のメッシュだけ（初期）</h3>
+              <div class="mesh">
+                <span class="full"></span><span class="full"></span><span></span><span></span><span></span><span></span><span></span>
+                <span class="full"></span><span class="full"></span><span class="full view"></span><span class="part view"></span><span class="view"></span><span></span><span></span>
+                <span></span><span></span><span class="full view"></span><span class="full view"></span><span class="view"></span><span></span><span></span>
+                <span></span><span></span><span></span><span></span><span></span><span></span><span class="full"></span>
+              </div>
+              <p class="muted">橙の枠＝今見ている範囲。取得・レイヤーへの配置は、この枠の分だけです。</p>
+            </div>
+            <div class="figure-box">
+              <h3>取得済みの範囲すべて</h3>
+              <div class="mesh">
+                <span class="full view"></span><span class="full view"></span><span></span><span></span><span></span><span></span><span></span>
+                <span class="full view"></span><span class="full view"></span><span class="full view"></span><span class="part view"></span><span></span><span></span><span></span>
+                <span></span><span></span><span class="full view"></span><span class="full view"></span><span></span><span></span><span></span>
+                <span></span><span></span><span></span><span></span><span></span><span></span><span class="full view"></span>
+              </div>
+              <p class="muted">保存先にある範囲を、すべてレイヤーで表示します（取得は今見ている範囲のまま）。</p>
+            </div>
+          </div>
+          <div class="legend">
+            <span><i class="view"></i>レイヤーで見せる範囲</span>
+            <span><i class="full"></i>チェックした内容がそろっている</span>
+            <span><i class="part"></i>一部だけ（項目を足した・新しいデータがある）</span>
+          </div>
+        </div>
+        <p class="muted">地図の塗り（緑・黄）は、保存先に取得済みの範囲すべてを、今のチェックに対して示します。チェックを足すと、前に取った範囲が黄に変わり、足りない項目があることが分かります。</p>
+      </section>
+
+      <section>
+        <h2>2. 基本の流れ</h2>
+        <ol>
+          <li>取得データはQGISプロジェクトファイルと同階層のフォルダに格納します。データ取得する前にプロジェクトを保存してください。</li>
+          <li>地図を作業する範囲へ動かします。範囲に掛かるメッシュが橙の枠で出ます。</li>
+          <li>左の「使用データ」で、必要な項目にチェックを入れます。</li>
+          <li>「取得」を押します。ログインしていなければ、ログインを求めます。</li>
+          <li>取得が終わると、レイヤーパネルのグループに配置されます。</li>
+        </ol>
+        <div class="note">取得しない日も、「レイヤーへ配置」で保存先にあるデータを置けます。押したときの範囲は、右下の「配置する範囲」の選択に従います。</div>
+      </section>
+
+      <section>
+        <h2>3. 画面の構成</h2>
+        <table>
+          <tr><th>使用データ</th><td>基盤地図情報と最適化ベクトルタイルの項目。チェックした項目を取得し、レイヤーへ配置し、地図の塗りの基準にします。同じ地物はどちらか一方だけ選べます（⇄）。「ロック」を押すと、今のチェックをプロジェクトの構成として記録し、変えられないようにします（「ロック中」）。同じ構成で別の場所を取得するときに使います。もう一度押すと外れます。ロックを外して変えたチェックは、「構成を復元」でロックに最後に記録した構成に戻せます。</td></tr>
+          <tr><th>状況の表</th><td>表示範囲のメッシュごとに、最新のデータの日付と保存済みの状況。「最新の状況を確認」で問い合わせ直します。</td></tr>
+          <tr><th>保存とレイヤー</th><td>保存先の GeoPackage、グループ名、取り直さない設定、取得後に配置する設定。</td></tr>
+          <tr><th>実行の区域</th><td>取得する件数の見込み、処理中は進み具合。右に「取得」「レイヤーへ配置」「配置する範囲」。待機中はプレビュー地図のチェックと地図の凡例。</td></tr>
+          <tr><th>記録</th><td>開くと窓の下に記録が出ます。右に「マニュアル」と言語の切り替え。</td></tr>
+        </table>
+      </section>
+
+      <section>
+        <h2>4. 保存先</h2>
+        <p>初めは、プロジェクトと同じ階層の <code>gsi_fgd_builder/gsi_fgd_builder.gpkg</code> です。使う保存先はプロジェクトに記録されるので、次に開いたときも同じものが選ばれます。</p>
+        <ul>
+          <li>そこにすでにデータがあれば、「共有データとして使用しますか？」と聞きます。「いいえ」なら、別の場所か別の名前を選びます。</li>
+          <li>「…」で別の場所の GeoPackage も選べます。地域ごとのデータを、複数のプロジェクトで共有することもできます。</li>
+          <li>プロジェクトを保存するまでは取得できません。</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>5. 取得と中止</h2>
+        <ul>
+          <li>取得はメッシュごとに進めます。1つのメッシュは、チェックした内容すべてをそろえてから保存します。</li>
+          <li>「中止」は取り込み中のメッシュを終えてから止まり、もう一度押す「すぐに止める」は、そのメッシュを取得前の状態のまま止まります。どちらでも、中途半端なメッシュは残りません。</li>
+          <li>取得中に窓を閉じると、中止の仕方を選んでから閉じます。</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>6. ログイン</h2>
+        <p>取得には、基盤地図情報ダウンロードサービスの利用者登録（無料）とログインが必要です。最新の状況の確認・地図の塗り・レイヤーへの配置は、ログインしなくても使えます。</p>
+        <p>最適化ベクトルタイルは、国土地理院の公開ページ（<a href="https://github.com/gsi-cyberjapan/optimal_bvmap">optimal_bvmap</a>）から別途取得することもできます。</p>
+        <div class="note">ID・パスワードは自動入力のために QGIS の設定に保存できますが、暗号化されません。共有PCでは推奨しません。</div>
+      </section>
+
+      <section>
+        <h2>7. データの利用と出典</h2>
+        <p>このプラグインで取得するデータは、すべて国土地理院のものです。取得したデータを地図や資料、画面で使うとき、人に渡すときは、国土地理院の利用規約と測量法に従ってください。</p>
+        <div class="note">利用規約や手続の内容は変わることがあります。ここに書いたのは目安です。使う前に、国土地理院のページで最新の内容を確認してください（下の「確認先」）。</div>
+
+        <h3>出典の表示</h3>
+        <p>取得したデータを使った地図・資料・画面には、出典を示します。書き方の例です。</p>
+        <table>
+          <tr><th>基盤地図情報</th><td><code>出典：基盤地図情報（国土地理院）</code></td></tr>
+          <tr><th>最適化ベクトルタイル</th><td><code>出典：国土地理院最適化ベクトルタイル</code></td></tr>
+          <tr><th>両方を使ったとき</th><td><code>出典：基盤地図情報、最適化ベクトルタイル（国土地理院）</code></td></tr>
+        </table>
+        <p class="muted">配置したレイヤーには、レイヤーのプロパティの「メタデータ」の権利の欄に出典を入れてあります。印刷レイアウトなどで出典を書くときの手がかりにしてください。</p>
+
+        <h3>加工したとき</h3>
+        <p>取得したデータを加工して（切り出し、属性の変更、ほかのデータとの重ね合わせなど）使うときは、出典に加えて加工したことを書きます。加工したものを、国土地理院が作ったように見せてはいけません。</p>
+        <table>
+          <tr><th>書き方の例</th><td><code>基盤地図情報（国土地理院）を加工して作成</code></td></tr>
+        </table>
+        <p class="muted">このプラグインが取り込むときに行っていること：</p>
+        <ul class="muted">
+          <li>基盤地図情報：ZIP の中の GML を GeoPackage の表へ並べ替え、メッシュの番号とデータの日付の項目を足します。曲線の地物は線分に直し、項目 <code>fid</code>（地物ID）は名前を <code>src_fid</code> に変えます。座標と、ほかの属性の値は変えません。</li>
+          <li>最適化ベクトルタイル：タイルの座標（ウェブメルカトル）を経緯度（JGD2011）に変換します。地物はタイルの枠で切られた形のまま保存し、タイルの番号と分類コードの名前（種別）の項目を足します。</li>
+        </ul>
+
+        <h3>測量法の承認申請</h3>
+        <p>基盤地図情報は、測量法の「基本測量の測量成果」にあたります。複製・使用の目的や方法によっては、国土地理院長の承認申請が必要です（測量法 第29条・第30条）。</p>
+        <ul>
+          <li>2019年12月の運用の見直しで、出典を示すだけで使える範囲が広がりました。</li>
+          <li>申請が要るかどうかは、使い方によって変わります。国土地理院の「地図の利用手続ナビ」で確かめられます。</li>
+          <li>申請が要る場合は、国土地理院のワンストップサービスから申請できます。</li>
+        </ul>
+
+        <h3>GeoPackage を人に渡すとき</h3>
+        <p>保存先の GeoPackage の中身は、国土地理院のデータそのものです。人に渡したり公開したりするときも、上の出典の表示や手続はそのまま当てはまります。受け取る人にも、出典と利用条件を伝えてください。</p>
+
+        <h3>最適化ベクトルタイル（試験公開）</h3>
+        <ul>
+          <li>国土地理院が試験公開しているデータです。URL やデータの内容が、予告なく変わったり、公開が終わったりすることがあります。</li>
+          <li>記号や注記の分類コードの意味は、国土地理院が公開している一覧から読み取れたものだけを入れています。</li>
+        </ul>
+
+        <h3>プレビュー地図（地理院タイル）</h3>
+        <p>プレビュー地図は、取得する範囲を選ぶための背景です。この窓を開いている間だけレイヤーパネルに置き、閉じると外します。GeoPackage には保存しません。出典は窓の下と、レイヤーのメタデータに示しています。</p>
+
+        <h3>データの時点と正確さ</h3>
+        <ul>
+          <li>基盤地図情報は、メッシュと項目ごとに更新の時点が違います。データの日付は、状況の表とレイヤーの名前（例：<code>道路縁-20260701</code>）で確かめられます。</li>
+          <li>最適化ベクトルタイルの日付は、配信ファイルが更新された日で、データの時点そのものではありません。</li>
+          <li>地図の精度は、データの元になった地図の縮尺（地図情報レベル）によって違います。現地の測量の代わりにはなりません。</li>
+        </ul>
+
+        <h3>確認先</h3>
+        <ul>
+          <li><a href="https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html">国土地理院の地図の利用手続</a></li>
+          <li><a href="https://www.gsi.go.jp/LAW/2930-index.html">測量成果の複製・使用（測量法 第29条・第30条）</a></li>
+          <li><a href="https://www.gsi.go.jp/LAW/2930-meizi.html">申請が要らず、出典の明示で使える場合</a></li>
+          <li><a href="https://www.gsi.go.jp/LAW/2930-qa.html">よくある質問</a></li>
+          <li><a href="https://service.gsi.go.jp/kiban/">基盤地図情報ダウンロードサービス</a></li>
+          <li><a href="https://github.com/gsi-cyberjapan/optimal_bvmap">最適化ベクトルタイル（国土地理院、GitHub）</a></li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>8. このプラグインについて</h2>
+        <ul>
+          <li>このプラグインは国土地理院が制作したものではありません。国土地理院が推奨・保証するものでもありません。</li>
+          <li>このプラグインは無保証です。使用によって生じた結果について、作者は責任を負いません。</li>
+          <li>ライセンスは GNU General Public License v2 以降です。</li>
+        </ul>
+      </section>
+    </div>
+
+    <!-- ===== ENGLISH ===== -->
+    <div id="content-en">
+
+      <section>
+        <h2>1. The idea</h2>
+        <div class="points">
+          <div class="point"><b>The map view is the basis</b>Fetching and display cover the 2nd-level meshes (about 10 km square) of the area shown on the map. Move the map and the target moves with it.</div>
+          <div class="point"><b>Only your work area, only what you need</b>The checked contents are fetched for that area only. What you fetch stays in the GeoPackage, and data that is up to date is not fetched again.</div>
+          <div class="point"><b>All stored areas when you need them</b>Set the placement range to "All stored areas" to show everything stored so far.</div>
+        </div>
+
+        <div class="figure">
+          <div class="figure-grid">
+            <div class="figure-box">
+              <h3>Visible meshes only (default)</h3>
+              <div class="mesh">
+                <span class="full"></span><span class="full"></span><span></span><span></span><span></span><span></span><span></span>
+                <span class="full"></span><span class="full"></span><span class="full view"></span><span class="part view"></span><span class="view"></span><span></span><span></span>
+                <span></span><span></span><span class="full view"></span><span class="full view"></span><span class="view"></span><span></span><span></span>
+                <span></span><span></span><span></span><span></span><span></span><span></span><span class="full"></span>
+              </div>
+              <p class="muted">Orange frames = the area in view. Fetching and placing layers cover these meshes only.</p>
+            </div>
+            <div class="figure-box">
+              <h3>All stored areas</h3>
+              <div class="mesh">
+                <span class="full view"></span><span class="full view"></span><span></span><span></span><span></span><span></span><span></span>
+                <span class="full view"></span><span class="full view"></span><span class="full view"></span><span class="part view"></span><span></span><span></span><span></span>
+                <span></span><span></span><span class="full view"></span><span class="full view"></span><span></span><span></span><span></span>
+                <span></span><span></span><span></span><span></span><span></span><span></span><span class="full view"></span>
+              </div>
+              <p class="muted">The layers show every area stored in the GeoPackage (fetching still covers the area in view).</p>
+            </div>
+          </div>
+          <div class="legend">
+            <span><i class="view"></i>Area shown by the layers</span>
+            <span><i class="full"></i>All checked contents stored</span>
+            <span><i class="part"></i>Partly stored (an item was added, or newer data exists)</span>
+          </div>
+        </div>
+        <p class="muted">The green and yellow fill shows every stored area against the current checks. Check a new item and earlier areas turn yellow, so you can see what is missing.</p>
+      </section>
+
+      <section>
+        <h2>2. Basic workflow</h2>
+        <ol>
+          <li>The fetched data is stored in a folder at the same level as the QGIS project file. Save the project before fetching data.</li>
+          <li>Move the map to your work area. The meshes covering it are shown with orange frames.</li>
+          <li>Check the items you need under "Data to use".</li>
+          <li>Press "Fetch". Log in when asked, for the Fundamental Geospatial Data.</li>
+          <li>When fetching has finished, the layers are placed in a group in the Layers panel.</li>
+        </ol>
+        <div class="note">Without fetching, "Place layers" places the data already stored. The area follows the placement range selected at the bottom right.</div>
+      </section>
+
+      <section>
+        <h2>3. Window layout</h2>
+        <table>
+          <tr><th>Data to use</th><td>Items of the Fundamental Geospatial Data and of the optimized vector tiles. The checked items are fetched, placed as layers, and used as the basis of the map colours. For the same features, only one of the two can be selected (⇄). "Lock" records the checked items as the configuration of the project and keeps them from being changed ("Locked"); use it to fetch other areas with the same configuration. Press again to unlock. After changing the checks while unlocked, "Restore" returns them to the configuration last recorded by the lock.</td></tr>
+          <tr><th>Status table</th><td>For each mesh in view, the latest data date and what is stored. "Check latest status" queries again.</td></tr>
+          <tr><th>Storage and layers</th><td>The GeoPackage, the group name, whether to skip up-to-date data, and whether to place layers after fetching.</td></tr>
+          <tr><th>Action area</th><td>What will be fetched, or the progress while working. On the right: "Fetch", "Place layers" and the placement range. When idle: the preview map check box and the map legend.</td></tr>
+          <tr><th>Log</th><td>Opens the log below the window. On the right: "Manual" and the language switch.</td></tr>
+        </table>
+      </section>
+
+      <section>
+        <h2>4. Where data is saved</h2>
+        <p>By default, <code>gsi_fgd_builder/gsi_fgd_builder.gpkg</code> next to the project file. The GeoPackage used is recorded in the project, so it is selected again next time.</p>
+        <ul>
+          <li>If data already exists there, you are asked whether to use it as shared data. If not, choose another location or another name.</li>
+          <li>"…" selects a GeoPackage elsewhere. Several projects can share the data of one region.</li>
+          <li>Fetching is not possible until the project is saved.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>5. Fetching and stopping</h2>
+        <ul>
+          <li>Fetching goes mesh by mesh. Each mesh is saved only when all checked contents are complete.</li>
+          <li>"Stop" finishes the mesh being imported first; "Stop now" (pressing again) leaves that mesh as it was before the fetch. Either way, no half-imported mesh is left.</li>
+          <li>Closing the window during a fetch asks how to stop, then closes.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>6. Login</h2>
+        <p>Fetching requires a free user account for the GSI download service (基盤地図情報ダウンロードサービス) and a login. Checking the latest status, the map colours and placing layers work without logging in.</p>
+        <p>The optimized vector tiles can also be obtained separately from the GSI release page (<a href="https://github.com/gsi-cyberjapan/optimal_bvmap">optimal_bvmap</a>).</p>
+        <div class="note">The ID and password can be saved in the QGIS settings for automatic filling, but they are not encrypted. Not recommended on a shared PC.</div>
+      </section>
+
+      <section>
+        <h2>7. Use of data and attribution</h2>
+        <p>All data fetched by this plugin belongs to the Geospatial Information Authority of Japan (GSI). When you use it in maps, documents or on screen, or give it to others, follow the GSI terms of use and the Survey Act of Japan.</p>
+        <div class="note">Terms and procedures may change. What is written here is a guide only; check the latest information on the GSI pages before use (see "Where to check" below).</div>
+
+        <h3>Showing the source</h3>
+        <p>Maps, documents and screens that use the fetched data must show the source. Examples:</p>
+        <table>
+          <tr><th>Fundamental Geospatial Data</th><td><code>Source: Fundamental Geospatial Data (GSI Japan)</code></td></tr>
+          <tr><th>Optimized vector tiles</th><td><code>Source: GSI optimized vector tiles</code></td></tr>
+          <tr><th>Both</th><td><code>Source: Fundamental Geospatial Data and optimized vector tiles (GSI Japan)</code></td></tr>
+        </table>
+        <p class="muted">The placed layers carry the source in the rights field of the layer metadata (layer properties → Metadata). Use it when writing the source in a print layout.</p>
+
+        <h3>When you process the data</h3>
+        <p>When you process the data (clipping, changing attributes, combining it with other data, etc.), state that it was processed in addition to the source. Processed data must not be presented as if GSI had made it.</p>
+        <table>
+          <tr><th>Example</th><td><code>Created by processing the Fundamental Geospatial Data (GSI Japan)</code></td></tr>
+        </table>
+        <p class="muted">What this plugin does when importing:</p>
+        <ul class="muted">
+          <li>Fundamental Geospatial Data: the GML in the ZIP files is rearranged into GeoPackage tables, and fields for the mesh code and the data date are added. Curved features are converted to line segments, and the field <code>fid</code> (feature ID) is renamed <code>src_fid</code>. Coordinates and other attribute values are not changed.</li>
+          <li>Optimized vector tiles: tile coordinates (Web Mercator) are converted to latitude/longitude (JGD2011). Features are stored as clipped by the tile boundaries, and fields for the tile number and the code name (種別) are added.</li>
+        </ul>
+
+        <h3>Approval under the Survey Act</h3>
+        <p>The Fundamental Geospatial Data is a result of basic surveys under the Survey Act. Depending on the purpose and method of copying or using it, an application for approval to the Director-General of GSI is required (Survey Act, Articles 29 and 30).</p>
+        <ul>
+          <li>Since a revision of the procedure in December 2019, more uses only need the source to be shown.</li>
+          <li>Whether an application is needed depends on the use. GSI's "地図の利用手続ナビ" (map use procedure guide) helps you check.</li>
+          <li>Applications can be made through GSI's one-stop service.</li>
+        </ul>
+
+        <h3>When you give the GeoPackage to others</h3>
+        <p>The GeoPackage contains GSI data as it is. Showing the source and the procedures above also apply when you give it to others or publish it. Tell the recipients the source and the terms of use.</p>
+
+        <h3>Optimized vector tiles (trial release)</h3>
+        <ul>
+          <li>This data is a trial release by GSI. The URL and contents may change, or the release may end, without notice.</li>
+          <li>Only the code meanings that could be read from GSI's published code list are included.</li>
+        </ul>
+
+        <h3>Preview map (GSI Tiles)</h3>
+        <p>The preview map is a background for choosing the area. It is in the Layers panel only while this window is open, and is not saved in the GeoPackage. Its source is shown at the bottom of the window and in the layer metadata.</p>
+
+        <h3>Data date and accuracy</h3>
+        <ul>
+          <li>The Fundamental Geospatial Data is updated at different times for each mesh and item. Check the data date in the status table and in the layer names (e.g. <code>Road edge-20260701</code>).</li>
+          <li>The date of the optimized vector tiles is the date the distributed file was updated, not the date of the data itself.</li>
+          <li>Accuracy depends on the scale (map information level) of the source maps. The data does not replace a field survey.</li>
+        </ul>
+
+        <h3>Where to check (in Japanese)</h3>
+        <ul>
+          <li><a href="https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html">GSI: procedures for using maps</a></li>
+          <li><a href="https://www.gsi.go.jp/LAW/2930-index.html">Copying and use of survey results (Survey Act, Articles 29 and 30)</a></li>
+          <li><a href="https://www.gsi.go.jp/LAW/2930-meizi.html">Uses that need only the source, without an application</a></li>
+          <li><a href="https://www.gsi.go.jp/LAW/2930-qa.html">FAQ</a></li>
+          <li><a href="https://service.gsi.go.jp/kiban/">Fundamental Geospatial Data download service</a></li>
+          <li><a href="https://github.com/gsi-cyberjapan/optimal_bvmap">Optimized vector tiles (GSI, GitHub)</a></li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>8. About this plugin</h2>
+        <ul>
+          <li>This plugin was not made by GSI, and is not endorsed or guaranteed by GSI.</li>
+          <li>The plugin is provided without warranty; the author takes no responsibility for any result of its use.</li>
+          <li>License: GNU General Public License v2 or later.</li>
+        </ul>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    function getLang() {
+      var hash = window.location.hash.replace('#', '');
+      if (hash.indexOf('lang=en') >= 0) return 'en';
+      if (hash.indexOf('lang=ja') >= 0) return 'ja';
+      var languages = navigator.languages && navigator.languages.length
+        ? navigator.languages
+        : [navigator.language || navigator.userLanguage || ''];
+      for (var i = 0; i < languages.length; i++) {
+        var language = String(languages[i] || '').toLowerCase();
+        if (language.indexOf('ja') === 0) return 'ja';
+        if (language.indexOf('en') === 0) return 'en';
+      }
+      return 'en';
+    }
+    function applyLang(lang) {
+      document.getElementById('content-ja').style.display = (lang === 'ja') ? '' : 'none';
+      document.getElementById('content-en').style.display = (lang === 'en') ? '' : 'none';
+      document.documentElement.lang = lang;
+      document.querySelectorAll('[data-ja]').forEach(function (el) { el.style.display = (lang === 'ja') ? '' : 'none'; });
+      document.querySelectorAll('[data-en]').forEach(function (el) { el.style.display = (lang === 'en') ? '' : 'none'; });
+    }
+    function toggleLang() {
+      var next = (getLang() === 'ja') ? 'en' : 'ja';
+      window.location.hash = 'lang=' + next;
+      applyLang(next);
+    }
+    applyLang(getLang());
+  </script>
+</body>
+</html>

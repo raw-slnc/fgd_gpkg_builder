@@ -120,7 +120,7 @@ ROAD_WIDTH_MM = {"RdEdg": 0.15, "RdCompt": 0.15, "RdCL": 0.1}
 # この縮尺（分母）よりズームアウトしたら描かないレイヤー
 HIDE_BEYOND_SCALE = {"TpgphLine": 15000}
 
-# ---- 最適化ベクトルタイル（ログイン不要） ----
+# ---- 最適化ベクトルタイル ----
 
 BV_SOURCE_URL = (
     "https://cyberjapandata.gsi.go.jp/xyz/optimal_bvmap-v1/"
