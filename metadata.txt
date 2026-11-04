@@ -1,5 +1,5 @@
 [general]
-name=G.S.I. Fundamental GeoPackage Builder
+name=G.S.I. and Fundamental GeoPackage Builder
 qgisMinimumVersion=3.44
 qgisMaximumVersion=4.99
 description=Fetches the Fundamental Geospatial Data (基盤地図情報) and optimized vector tiles of the Geospatial Information Authority of Japan sheet by sheet (2nd-level meshes) and builds them into one GeoPackage, placed as grouped layers.

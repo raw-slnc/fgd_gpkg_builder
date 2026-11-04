@@ -11,7 +11,7 @@ from .i18n import tr
 
 # プラグインの名前（metadata.txt の name と同じ）。G.S.I. は Grid Sheet Importer（2次メッシュ＝図郭ごとに取り込む）の
 # 頭文字で、国土地理院（GSI）の略ではない
-PLUGIN_NAME = "G.S.I. Fundamental GeoPackage Builder"
+PLUGIN_NAME = "G.S.I. and Fundamental GeoPackage Builder"
 
 # ---- 基盤地図情報（ログインが必要） ----
 

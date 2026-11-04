@@ -1,8 +1,8 @@
-# G.S.I. Fundamental GeoPackage Builder
+# G.S.I. and Fundamental GeoPackage Builder
 
 A QGIS plugin that fetches the Fundamental Geospatial Data (基盤地図情報) and the optimized vector tiles of the Geospatial Information Authority of Japan sheet by sheet (2nd-level meshes) and builds them into one GeoPackage, placed as grouped layers.
 
-**G.S.I. stands for Grid Sheet Importer** — data is fetched and stored per 2nd-level mesh sheet (about 10 km square). It is not an abbreviation of the Geospatial Information Authority of Japan (GSI); see [Disclaimer](#disclaimer).
+**G.S.I. stands for Grid Sheet Importer** — data is fetched and stored per 2nd-level mesh sheet (about 10 km square).
 
 ![QGIS](https://img.shields.io/badge/QGIS-3.44%2B%20%2F%204.x-green)
 ![Version](https://img.shields.io/badge/version-0.0.1-blue)
@@ -78,7 +78,7 @@ Hideharu Masai
 
 基盤地図情報は、メッシュごと・項目ごとの多数の ZIP で配られ、これまでは手作業で多数のシェープファイルに変換することが多かったものです。このプラグインは、それを1つの GeoPackage にまとめて持ちます。表示範囲の分を取得し、保存したものを覚えておき、足りないものと新しくなったものだけを取り直します。
 
-**G.S.I. は Grid Sheet Importer の頭文字です**（2次メッシュの図郭＝約10km四方ごとに取り込む）。国土地理院（GSI）の略ではありません。[免責事項](#免責事項)もご覧ください。
+**G.S.I. は Grid Sheet Importer の頭文字です**（2次メッシュの図郭＝約10km四方ごとに取り込む）。
 
 ### 主な機能
 
