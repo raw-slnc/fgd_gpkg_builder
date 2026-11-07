@@ -88,6 +88,7 @@ def _ensure_table(ds, name, geometry_type, fields):
 #
 # 組み立てるのは下の _delete・_select_first・rtree_subset だけ。表・列の名前は _ident で英数字と
 # アンダースコアだけのもの（このプラグインが決めた名前）に限り、値は _quote（文字）か int（数）で入れる。
+# _delete に渡すタイルの組も int にしてから入れる。
 # 外から来た文字がそのまま SQL の文になることはないので、組み立てる3行だけ bandit の B608 を外している。
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -105,16 +106,27 @@ def _quote(text):
 
 
 def _condition(conditions):
-    """[(項目, 値)...] を「項目 = 値 AND ...」にする。値は int なら数、ほかは文字として入れる"""
+    """[(項目, 値)...] を「項目 = 値 AND ...」にする。値は int なら数、ほかは文字として入れる。
+    リストなら「項目 IN (...)」"""
+    def literal(value):
+        return str(int(value)) if isinstance(value, int) else _quote(value)
+
     parts = []
     for column, value in conditions:
-        literal = str(int(value)) if isinstance(value, int) else _quote(value)
-        parts.append("{0} = {1}".format(_ident(column), literal))
+        if isinstance(value, list):
+            parts.append("{0} IN ({1})".format(_ident(column), ", ".join(literal(v) for v in value)))
+        else:
+            parts.append("{0} = {1}".format(_ident(column), literal(value)))
     return " AND ".join(parts)
 
 
-def _delete(ds, table, conditions):
-    statement = "DELETE FROM " + _ident(table) + " WHERE " + _condition(conditions)  # nosec B608
+def _delete(ds, table, conditions, tiles=()):
+    """tiles を渡すと、その [(x, y)...] のタイルの行だけを1文で消す（タイルごとに1文では遅かった）"""
+    where = _condition(conditions)
+    if tiles:
+        pairs = ", ".join("({0}, {1})".format(int(x), int(y)) for x, y in tiles)
+        where += ' AND ("tile_x", "tile_y") IN (VALUES ' + pairs + ")"
+    statement = "DELETE FROM " + _ident(table) + " WHERE " + where  # nosec B608
     result = ds.ExecuteSQL(statement)
     if result is not None:
         ds.ReleaseResultSet(result)
@@ -153,19 +165,16 @@ def _polygon_wkt(lon0, lat0, lon1, lat1):
 
 # ---- 読み出し（どのスレッドからでもよい） ----
 
-def stored_bv_tiles(path, source_layer, zoom):
-    """{(x, y): source_date}"""
+def current_bv_tiles(path, source_layers, zoom, source_date):
+    """source_layers のすべてを同じ配信データ（source_date）で取得済みのタイル {(x, y)...}。
+    行を1つずつ読むと遅いので、数えるのは GeoPackage（SQLite）に任せる"""
     ds = open_store(path, False)
-    if ds is None:
-        return {}
-    layer = ds.GetLayerByName(BV_TILES_TABLE)
-    tiles = {}
-    if layer is not None:
-        layer.SetAttributeFilter("source_layer = {0} AND tile_z = {1}".format(_quote(source_layer), int(zoom)))
-        for feature in layer:
-            tiles[(feature.GetField("tile_x"), feature.GetField("tile_y"))] = feature.GetField("source_date") or ""
+    if ds is None or ds.GetLayerByName(BV_TILES_TABLE) is None:
+        return set()
+    conditions = [("source_layer", list(source_layers)), ("tile_z", int(zoom)), ("source_date", source_date)]
+    rows = _select_rows(ds, ["tile_x", "tile_y", "COUNT(*)"], BV_TILES_TABLE, conditions, group_by=["tile_x", "tile_y"])
     ds = None
-    return tiles
+    return {(x, y) for x, y, count in rows if count == len(source_layers)}
 
 
 def record_count(path):
@@ -463,13 +472,14 @@ def _write_mesh_record(out, mesh, type_info, data_date, file_names, fetched_at, 
     mesh_layer.CreateFeature(record)
 
 
-def _write_fgd_type(out, mesh, layer_codes, sources, data_date, cancel_cb):
+def _write_fgd_type(out, mesh, layer_codes, sources, data_date, cancel_cb, report):
     """1つの種類の地物を書き込む（まとまりの中で呼ぶ）。そのメッシュの前の地物は消して入れ替える"""
     counts = {code: 0 for code in layer_codes}
     for code in layer_codes:
         if out.GetLayerByName(code) is not None:
             _delete(out, code, [("mesh_code", mesh)])
     for code, ds in sources:
+        report(fgd_layer_name(code), advance=1)
         out_layer = out.GetLayerByName(code)
         if out_layer is None:
             # GDAL が地物を1件も読めなかったファイル（表を作るもとが無い）は飛ばす
@@ -486,8 +496,11 @@ def _write_fgd_type(out, mesh, layer_codes, sources, data_date, cancel_cb):
             ]
             src_layer.ResetReading()
             for n, feature in enumerate(src_layer):
-                if n % 2000 == 0 and cancel_cb is not None and cancel_cb():
-                    raise InterruptedError()
+                if n % 2000 == 0:
+                    if cancel_cb is not None and cancel_cb():
+                        raise InterruptedError()
+                    if n:
+                        report(fgd_layer_name(code), counts[code])
                 new = ogr.Feature(out_defn)
                 new.SetFromWithMap(feature, 1, field_map)
                 geometry = feature.GetGeometryRef()
@@ -530,7 +543,7 @@ def _ensure_bv_tables(out, items):
     return layers
 
 
-def _write_bv_tiles(out, layers, items, zoom, results, fetched_at, source_date, cancel_cb):
+def _write_bv_tiles(out, layers, items, zoom, results, fetched_at, source_date, cancel_cb, report):
     """読んだタイル（3857 の座標）を経緯度にして書き込む（まとまりの中で呼ぶ）。同じタイルの前の地物は入れ替える"""
     src_srs = osr.SpatialReference()
     src_srs.ImportFromEPSG(3857)
@@ -538,15 +551,20 @@ def _write_bv_tiles(out, layers, items, zoom, results, fetched_at, source_date, 
     to_lonlat = osr.CoordinateTransformation(src_srs, _store_srs())
     tiles_layer = out.GetLayerByName(BV_TILES_TABLE)
     counts = {item["source_layer"]: 0 for item in items}
-    for result in results:
+    # 同じタイルの前の地物は、項目ごとに1文でまとめて消す（タイル×項目の数だけ文を出すと遅かった）
+    tiles = [(result["x"], result["y"]) for result in results]
+    for item in items:
+        _delete(out, bv_table(item), [("tile_z", int(zoom))], tiles)
+        _delete(out, BV_TILES_TABLE, [("source_layer", item["source_layer"]), ("tile_z", int(zoom))], tiles)
+    label = tr("optimized vector tiles", "最適化ベクトルタイル")
+    for n, result in enumerate(results):
         if cancel_cb is not None and cancel_cb():
             raise InterruptedError()
+        if n % 10 == 0:
+            report(label, n, advance=10 if n else 0)
         x, y = result["x"], result["y"]
-        tile_key = [("tile_z", int(zoom)), ("tile_x", int(x)), ("tile_y", int(y))]
         for item in items:
             name = item["source_layer"]
-            _delete(out, bv_table(item), tile_key)
-            _delete(out, BV_TILES_TABLE, [("source_layer", name)] + tile_key)
             out_layer = layers[name]
             defn = out_layer.GetLayerDefn()
             rows = result["features"].get(name, [])
@@ -582,12 +600,13 @@ def _write_bv_tiles(out, layers, items, zoom, results, fetched_at, source_date, 
 
 
 def write_block(path, mesh, fgd_entries, absent_types, bv_items, zoom, bv_results, fetched_at, source_date,
-                cancel_cb=None):
+                cancel_cb=None, progress_cb=None):
     """1つの2次メッシュ（ブロック）の分をまとめて書き込む。すべて書けたときだけ残し、途中で止まったときや
     失敗したときは、このメッシュは取り込む前の状態のまま（中途半端な範囲を作らない）。
 
     fgd_entries: [{"type_info", "layer_codes", "zip_paths", "data_date", "file_names"}]
     absent_types: 一覧にデータが無かった基盤地図情報の種類（type_info）。「データなし」として記録する
+    progress_cb(名前, 件数, 済んだ量, 全体の量): 進み具合。件数が分からないときは None
     返り値は ({基盤地図情報のレイヤー: 件数}, {最適化ベクトルタイルの項目: 件数}, 一覧に無かったレイヤーの名前)"""
     bounds = fgd_api.mesh2_bounds(mesh)
     opened = []
@@ -596,6 +615,14 @@ def write_block(path, mesh, fgd_entries, absent_types, bv_items, zoom, bv_result
         sources, found = _open_fgd_sources(entry["zip_paths"], entry["layer_codes"], bounds)
         opened.append((entry, sources))
         unknown |= found
+
+    done = [0]
+    total = sum(len(sources) for _entry, sources in opened) + (len(bv_results) if bv_items else 0)
+
+    def report(label, count=None, advance=0):
+        done[0] = min(done[0] + advance, total)
+        if progress_cb is not None:
+            progress_cb(label, count, done[0], total)
 
     out = open_store(path, True)
     try:
@@ -621,7 +648,8 @@ def write_block(path, mesh, fgd_entries, absent_types, bv_items, zoom, bv_result
         out.StartTransaction()
         try:
             for entry, sources in opened:
-                counts = _write_fgd_type(out, mesh, entry["layer_codes"], sources, entry["data_date"], cancel_cb)
+                counts = _write_fgd_type(
+                    out, mesh, entry["layer_codes"], sources, entry["data_date"], cancel_cb, report)
                 layer_counts = _merged_layer_counts(out, mesh, entry["type_info"]["code"], entry["data_date"], counts)
                 _write_mesh_record(
                     out, mesh, entry["type_info"], entry["data_date"], entry["file_names"], fetched_at, bounds,
@@ -632,7 +660,8 @@ def write_block(path, mesh, fgd_entries, absent_types, bv_items, zoom, bv_result
                 _write_mesh_record(out, mesh, type_info, "", [], fetched_at, bounds, "")
             if bv_layers:
                 bv_counts = _write_bv_tiles(
-                    out, bv_layers, bv_items, zoom, bv_results, fetched_at, source_date, cancel_cb)
+                    out, bv_layers, bv_items, zoom, bv_results, fetched_at, source_date, cancel_cb, report)
+            report(tr("saving", "保存"), advance=total)
             out.CommitTransaction()
         except BaseException:
             out.RollbackTransaction()

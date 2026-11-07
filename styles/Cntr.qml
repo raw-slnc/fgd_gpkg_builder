@@ -2,7 +2,7 @@
 <qgis autoRefreshMode="Disabled" autoRefreshTime="0" hasScaleBasedVisibilityFlag="0" labelsEnabled="1" layerType="Vector" maxScale="0" minScale="0" simplifyAlgorithm="0" simplifyDrawingHints="1" simplifyDrawingTol="1" simplifyLocal="1" simplifyMaxScale="1" styleCategories="Symbology|Labeling|Rendering" symbologyReferenceScale="-1" version="4.2.2-Belém do Pará">
  <renderer-v2 enableorderby="0" forceraster="0" referencescale="-1" symbollevels="0" type="RuleRenderer">
   <rules key="{6ccef44e-3701-4dc4-9284-aefda423b785}">
-   <rule checkstate="0" filter="right(&quot;alti&quot;,1)='5'" key="{01daa1fc-69e0-4edf-a117-8c86aadc558c}" label="5m" scalemaxdenom="50001" scalemindenom="1" symbol="0"/>
+   <rule filter="right(&quot;alti&quot;,1)='5'" key="{01daa1fc-69e0-4edf-a117-8c86aadc558c}" label="5m" scalemaxdenom="15000" scalemindenom="1" symbol="0"/>
    <rule filter="right(&quot;alti&quot;,2)='10'or right(&quot;alti&quot;,2)='30'or right(&quot;alti&quot;,2)='50'or right(&quot;alti&quot;,2)='70'or right(&quot;alti&quot;,2)='90' " key="{fa345bea-d56f-41ff-b63b-1150e898e380}" label="10m" scalemaxdenom="70000" scalemindenom="1" symbol="1"/>
    <rule filter="right(&quot;alti&quot;,2)='20'or right(&quot;alti&quot;,2)='40'or right(&quot;alti&quot;,2)='60'or right(&quot;alti&quot;,2)='80'" key="{d5b60594-caad-410d-bfa1-52f829d2d0f9}" label="20m" scalemaxdenom="40001" scalemindenom="1" symbol="2"/>
    <rule filter="right(&quot;alti&quot;,2)='00'" key="{6a1133ac-afd1-4666-8b8e-707aff8889c2}" label="100m" scalemaxdenom="50001" scalemindenom="1" symbol="3"/>
@@ -28,9 +28,9 @@
       <Option name="dash_pattern_offset_unit" type="QString" value="MM"/>
       <Option name="draw_inside_polygon" type="QString" value="0"/>
       <Option name="joinstyle" type="QString" value="bevel"/>
-      <Option name="line_color" type="QString" value="0,0,0,255,rgb:0,0,0,1"/>
+      <Option name="line_color" type="QString" value="58,28,0,255,rgb:0.227451,0.1098039,0,1"/>
       <Option name="line_style" type="QString" value="solid"/>
-      <Option name="line_width" type="QString" value="0.08"/>
+      <Option name="line_width" type="QString" value="0.03"/>
       <Option name="line_width_unit" type="QString" value="MM"/>
       <Option name="offset" type="QString" value="0"/>
       <Option name="offset_map_unit_scale" type="QString" value="3x:0,0,0,0,0,0"/>

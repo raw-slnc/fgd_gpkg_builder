@@ -165,7 +165,7 @@ class FetchThread(QThread):
             if self.need_login:
                 return
             source_date = ""
-            bv_stored = []
+            bv_current = set()
             if self.bv_items:
                 try:
                     bv_ds, source_date = _open_bvmap()
@@ -183,8 +183,11 @@ class FetchThread(QThread):
             if self.bv_items:
                 if self.skip_current and source_date:
                     # 同じ配信データから取ったタイルは取り直さない（項目ごとに確かめ、どれかが古ければ取る）
-                    bv_stored = [store.stored_bv_tiles(self.path, i["source_layer"], BV_ZOOM) for i in self.bv_items]
-            blocks = self._plan_blocks(fgd_plan, absent, bv_stored, source_date)
+                    self.stage.emit(tr("Optimized vector tiles: checking the stored tiles…",
+                                       "最適化ベクトルタイル：保存済みのタイルを確認しています…"))
+                    bv_current = store.current_bv_tiles(
+                        self.path, [i["source_layer"] for i in self.bv_items], BV_ZOOM, source_date)
+            blocks = self._plan_blocks(fgd_plan, absent, bv_current, source_date)
             if not blocks:
                 if not self.bv_failed:
                     self.summary.append(tr("Everything stored is up to date. Nothing needs fetching.",
@@ -225,7 +228,7 @@ class FetchThread(QThread):
             self.need_login = True
         return plan, absent
 
-    def _plan_blocks(self, fgd_plan, absent, bv_stored, source_date):
+    def _plan_blocks(self, fgd_plan, absent, bv_current, source_date):
         """[(mesh, [(type_code, items)], [データの無い type_code], [(x, y)])]"""
         blocks = []
         claimed = set()  # 隣のメッシュと掛かるタイルは、先のメッシュで取る
@@ -236,7 +239,7 @@ class FetchThread(QThread):
                     if tile in claimed:
                         continue
                     claimed.add(tile)
-                    if bv_stored and all(s.get(tile) == source_date for s in bv_stored):
+                    if tile in bv_current:
                         continue
                     tiles.append(tile)
             fgd = fgd_plan.get(mesh, [])
@@ -331,9 +334,17 @@ class FetchThread(QThread):
             self.file_progress.emit(n + 1, len(tiles))
 
         self.stage.emit(tr("{0}: importing…", "{0}：取り込んでいます…").format(head))
+        self.file_progress.emit(0, 1)
+
+        def import_progress(label, count, done, total):
+            detail = tr("{0}, {1}", "{0} {1} 件").format(label, count) if count else label
+            self.stage.emit(tr("{0}: importing ({1})…", "{0}：取り込んでいます（{1}）…").format(head, detail))
+            self.file_progress.emit(done, total)
+
         fgd_counts, bv_counts, found_unknown = store.write_block(
             self.path, mesh, entries, [FGD_TYPE_BY_CODE[c] for c in absent_codes], self.bv_items, BV_ZOOM,
             results, datetime.now().isoformat(timespec="seconds"), source_date, cancel_cb=self.is_cancelled,
+            progress_cb=import_progress,
         )
         unknown |= found_unknown
         sep = tr(", ", "、")
