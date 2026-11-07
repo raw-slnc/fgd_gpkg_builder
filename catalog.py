@@ -203,7 +203,6 @@ BV_ITEMS = [
     _bv("StrctArea", "構造物面", "建物・構造物", "MultiPolygon", [], ("#808080", 0.15, "#d0d0d0"),
         {4301: "巨大構造物", 4302: "タンク"}),
     _bv("PwrTrnsmL", "送電線", "建物・構造物", "MultiLineString", [], ("#9a5c2e", 0.4, None), {8202: "送電線"}),
-    _bv("WA", "水域", "水", "MultiPolygon", [], ("#7fb8e0", 0.1, "#bfe3f7"), overlap="WA"),
     _bv("WL", "水涯線", "水", "MultiLineString", [], ("#3a8fd0", 0.25, None), overlap="WL"),
     _bv("RvrCL", "河川中心線", "水", "MultiLineString", [], ("#2f7fd0", 0.35, None),
         {5301: "一条河川（通常部）", 5302: "一条河川（枯れ川部）", 5321: "人工水路（空間）", 5322: "人工水路（地下）",
@@ -219,6 +218,8 @@ BV_ITEMS = [
         {5901: "水上・海上交通（船舶）", 5902: "水上・海上交通（航路の軌跡）", 5911: "流水方向"}),
     _bv("Cstline", "海岸線", "水", "MultiLineString", [], ("#1f5fa8", 0.4, None), overlap="Cstline"),
     _bv("Isbt", "等深線", "水", "MultiLineString", [("vt_depth", _R)], ("#7fb2e5", 0.2, None)),
+    # この並びがレイヤーパネルの上からの順になる。水域は、中にある等深線・河川中心線・構造物面を隠さないよう水の中で最後に置く
+    _bv("WA", "水域", "水", "MultiPolygon", [], ("#7fb8e0", 0.1, "#bfe3f7"), overlap="WA"),
     _bv("Cntr", "等高線", "地形", "MultiLineString", [("vt_alti", _I)], ("#b07a3a", 0.15, None),
         {7351: "等高線（通常部）", 7352: "等高線（数値部）", 7353: "等高線（崖部）", 7371: "等深線（湖池）"},
         overlap="Cntr"),
