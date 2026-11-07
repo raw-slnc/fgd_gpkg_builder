@@ -42,7 +42,7 @@ from .credentials import CredentialsManager
 from .i18n import ENGLISH, JAPANESE, is_japanese, set_language, tr
 from .login_dialog import LoginDialog
 from .tiles import tile_center_lonlat, tile_range
-from .worker import FetchThread, ListThread, StoredThread, mesh_tiles, plan_fgd_downloads
+from .worker import FetchThread, ListThread, StoredThread, mesh_tiles, missing_fgd_layers, plan_fgd_downloads
 
 SETTINGS = "fgd_gpkg_builder/"
 ROLE = Qt.ItemDataRole.UserRole
@@ -1013,13 +1013,14 @@ class FgdGpkgDialog(QDialog):
     # ================= 取得済みの範囲（地図の塗り） =================
 
     def _stored_state(self):
-        """{"fgd": {(mesh, type_code): data_date}, "bv": {source_layer: {メッシュ: タイル数}}}。
+        """{"fgd": {(mesh, type_code): data_date}, "layers": {(mesh, type_code): 取り込んだレイヤーの集合},
+        "bv": {source_layer: {メッシュ: タイル数}}}。
 
         読むのは別スレッド（StoredThread）。読み終わるまでは空を返し、読み終わったら表・見込み・地図を描き直す"""
         if self._stored_cache is None:
             self._load_stored()
             if self._stored_cache is None:
-                return {"fgd": {}, "bv": {}}
+                return {"fgd": {}, "layers": {}, "bv": {}}
         return self._stored_cache
 
     def _stored_loading(self):
@@ -1077,7 +1078,7 @@ class FgdGpkgDialog(QDialog):
     def _mesh_status(self):
         """{メッシュ: "full" | "part"}。取得済みの範囲すべてを、今のチェックに対して判定する"""
         state = self._stored_state()
-        types = set(self._checked_fgd_layers())
+        types = self._checked_fgd_layers()
         names = [i["source_layer"] for i in self._checked_bv_items()]
         candidates = {mesh for mesh, type_code in state["fgd"] if type_code in types}
         for name in names:
@@ -1089,10 +1090,13 @@ class FgdGpkgDialog(QDialog):
             for item in listed or []:
                 latest.setdefault(item["type_code"], fgd_api.item_date(item))
             have = 0
-            for type_code in types:
+            for type_code, layer_codes in types.items():
                 saved = state["fgd"].get((mesh, type_code))
                 # 一覧を問い合わせたメッシュでは、新しいデータがあれば「そろっていない」とする
-                if saved is not None and (listed is None or latest.get(type_code, saved) == saved):
+                if saved is None or (listed is not None and latest.get(type_code, saved) != saved):
+                    continue
+                # チェックを足して、取り込んでいないレイヤーがあるときも「そろっていない」。データの無い種類（空の日付）は除く
+                if saved == "" or not missing_fgd_layers(state["layers"], mesh, type_code, layer_codes):
                     have += 1
             expected = self._center_tile_count(mesh) if names else 0
             for name in names:
@@ -1299,6 +1303,9 @@ class FgdGpkgDialog(QDialog):
     def _stored_dates(self):
         return self._stored_state()["fgd"]
 
+    def _stored_layers(self):
+        return self._stored_state()["layers"]
+
     def _fill_table(self):
         meshes = self._meshes if len(self._meshes) <= TABLE_MAX_ROWS else []
         current = self._listing_for_current()
@@ -1307,7 +1314,7 @@ class FgdGpkgDialog(QDialog):
         for item in listing:
             latest.setdefault((item["place_code"], item["type_code"]), []).append(item)
         stored = self._stored_dates()
-        checked_types = set(self._checked_fgd_layers())
+        checked_types = self._checked_fgd_layers()
         stored_label = tr("Stored: {0}", "保存済み：{0}")
 
         # 欄の幅を「中身に合わせる」のままだと、セルを入れるたびに幅を測り直して遅かった（182 メッシュで十数秒）。
@@ -1368,7 +1375,14 @@ class FgdGpkgDialog(QDialog):
                     size_mb = sum(fgd_api.item_size(i) for i in items) / 1024 / 1024
                     tips.append(tr("Latest: {0} ({1:.1f} MB)", "最新：{0}（{1:.1f} MB）").format(date, size_mb))
                     tips.extend(i["file_name"] for i in items)
-                    if saved == date:
+                    missing = missing_fgd_layers(
+                        self._stored_layers(), mesh, type_info["code"], checked_types.get(type_info["code"], []))
+                    if saved == date and missing:
+                        cell.setText(_short_date(date) + "\n" + tr("Part stored", "一部のみ"))
+                        cell.setBackground(QBrush(COLOR_UPDATE))
+                        tips.append(tr("Checked but not stored: ", "チェックしたが未保存：")
+                                    + tr(", ", "、").join(fgd_layer_name(code) for code in missing))
+                    elif saved == date:
                         cell.setText(_short_date(date) + "\n" + tr("Stored", "保存済み"))
                         cell.setBackground(QBrush(COLOR_CURRENT))
                     elif saved:
@@ -1428,7 +1442,8 @@ class FgdGpkgDialog(QDialog):
         listing = self._listing_for_current()
         fgd_layers = self._checked_fgd_layers()
         if fgd_layers and listing is not None:
-            plan = plan_fgd_downloads(listing, self._stored_dates(), set(fgd_layers), self.skipCheckbox.isChecked())
+            plan = plan_fgd_downloads(listing, self._stored_dates(), fgd_layers, self.skipCheckbox.isChecked(),
+                                      self._stored_layers())
             size_mb = sum(fgd_api.item_size(i) for _m, _t, items in plan for i in items) / 1024 / 1024
             if plan:
                 lines.append(tr("Fundamental Geospatial Data: fetching {0} meshes, {1} items (about {2:.1f} MB).",
@@ -1640,7 +1655,8 @@ class FgdGpkgDialog(QDialog):
         listing = self._listing_for_current()
         plan = None
         if fgd_layers and listing is not None:
-            plan = plan_fgd_downloads(listing, self._stored_dates(), set(fgd_layers), self.skipCheckbox.isChecked())
+            plan = plan_fgd_downloads(listing, self._stored_dates(), fgd_layers, self.skipCheckbox.isChecked(),
+                                      self._stored_layers())
         # 上限は設けず、多いときだけ確かめる
         tile_count = self._bv_tile_count() if bv_items else 0
         if len(self._meshes) > CONFIRM_MESHES or tile_count > CONFIRM_TILES:

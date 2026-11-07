@@ -153,20 +153,6 @@ def _polygon_wkt(lon0, lat0, lon1, lat1):
 
 # ---- 読み出し（どのスレッドからでもよい） ----
 
-def stored_fgd_dates(path):
-    """{(mesh_code, type_code): data_date}"""
-    ds = open_store(path, False)
-    if ds is None:
-        return {}
-    layer = ds.GetLayerByName(MESH_TABLE)
-    dates = {}
-    if layer is not None:
-        for feature in layer:
-            dates[(feature.GetField("mesh_code"), feature.GetField("type_code"))] = feature.GetField("data_date")
-    ds = None
-    return dates
-
-
 def stored_bv_tiles(path, source_layer, zoom):
     """{(x, y): source_date}"""
     ds = open_store(path, False)
@@ -193,20 +179,35 @@ def record_count(path):
     return count
 
 
-def read_fgd_dates(path, progress_cb=None, every=2000):
-    """stored_fgd_dates と同じ。progress_cb(読んだ行数) を every 行ごとに呼ぶ"""
+def _parse_layer_counts(text):
+    """記録の layer_counts（「AdmBdy=87, AdmArea=51」）を {レイヤー: 件数の文字} にする"""
+    counts = {}
+    for part in (text or "").split(","):
+        code, separator, count = part.strip().partition("=")
+        if separator:
+            counts[code] = count
+    return counts
+
+
+def read_fgd_records(path, progress_cb=None, every=2000):
+    """({(mesh_code, type_code): data_date}, {(mesh_code, type_code): 取り込んだレイヤーの集合})。
+    1つの種類の ZIP に複数のレイヤーが入っているので、取り込んだかどうかはレイヤーごとに見る。
+    progress_cb(読んだ行数) を every 行ごとに呼ぶ"""
     ds = open_store(path, False)
     if ds is None:
-        return {}
+        return {}, {}
     layer = ds.GetLayerByName(MESH_TABLE)
     dates = {}
+    layers = {}
     if layer is not None:
         for n, feature in enumerate(layer, 1):
-            dates[(feature.GetField("mesh_code"), feature.GetField("type_code"))] = feature.GetField("data_date")
+            key = (feature.GetField("mesh_code"), feature.GetField("type_code"))
+            dates[key] = feature.GetField("data_date")
+            layers[key] = set(_parse_layer_counts(feature.GetField("layer_counts")))
             if progress_cb and n % every == 0:
                 progress_cb(n)
     ds = None
-    return dates
+    return dates, layers
 
 
 def tile_mesh(x, y, zoom):
@@ -435,6 +436,18 @@ def _ensure_mesh_table(out):
     ])
 
 
+def _merged_layer_counts(out, mesh, type_code, data_date, counts):
+    """記録に残す「レイヤー=件数」。同じ日付のデータなら、今回取り込まなかったレイヤーの記録も残す。
+    日付が変わったときは残さない（残すと、古いデータのレイヤーを最新として扱ってしまう）"""
+    merged = {code: str(count) for code, count in counts.items()}
+    previous = _select_first(out, ["data_date", "layer_counts"], MESH_TABLE,
+                             [("mesh_code", mesh), ("type_code", type_code)])
+    if previous is not None and previous[0] == data_date:
+        for code, count in _parse_layer_counts(previous[1]).items():
+            merged.setdefault(code, count)
+    return ", ".join("{0}={1}".format(code, count) for code, count in merged.items())
+
+
 def _write_mesh_record(out, mesh, type_info, data_date, file_names, fetched_at, bounds, layer_counts):
     _delete(out, MESH_TABLE, [("mesh_code", mesh), ("type_code", type_info["code"])])
     mesh_layer = out.GetLayerByName(MESH_TABLE)
@@ -609,9 +622,10 @@ def write_block(path, mesh, fgd_entries, absent_types, bv_items, zoom, bv_result
         try:
             for entry, sources in opened:
                 counts = _write_fgd_type(out, mesh, entry["layer_codes"], sources, entry["data_date"], cancel_cb)
+                layer_counts = _merged_layer_counts(out, mesh, entry["type_info"]["code"], entry["data_date"], counts)
                 _write_mesh_record(
                     out, mesh, entry["type_info"], entry["data_date"], entry["file_names"], fetched_at, bounds,
-                    ", ".join("{0}={1}".format(code, counts[code]) for code in entry["layer_codes"]))
+                    layer_counts)
                 fgd_counts.update(counts)
             for type_info in absent_types:
                 # データの無い種類（海だけのメッシュの建物など）。data_date を空にして「確かめた」ことを残す

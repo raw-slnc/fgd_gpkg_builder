@@ -45,7 +45,8 @@ class ListThread(QThread):
 class StoredThread(QThread):
     """保存先の取得の記録を読む（大きな GeoPackage では時間がかかるので、窓を開くのを待たせない）。
 
-    results: {"fgd": {(mesh, type_code): data_date}, "bv": {source_layer: {メッシュ: タイル数}}}
+    results: {"fgd": {(mesh, type_code): data_date}, "layers": {(mesh, type_code): 取り込んだレイヤーの集合},
+    "bv": {source_layer: {メッシュ: タイル数}}}
     最適化ベクトルタイルは、中心が入るメッシュに数える（隣のメッシュと重ねて数えない）。数えるのは
     GeoPackage（SQLite）に任せる。前の版で書いた記録にメッシュ番号が無ければ、最初に一度だけ足す"""
 
@@ -56,7 +57,7 @@ class StoredThread(QThread):
     def __init__(self, path):
         super().__init__()
         self.path = path
-        self.results = {"fgd": {}, "bv": {}}
+        self.results = {"fgd": {}, "layers": {}, "bv": {}}
 
     def run(self):
         try:
@@ -67,29 +68,39 @@ class StoredThread(QThread):
             # 進み具合：基盤地図情報の記録の行、前の版の記録にメッシュ番号を足す分（1）、メッシュごとに数える分（1）
             total = fgd_rows + (1 if missing else 0) + 1
             self.progress.emit(0, total)
-            fgd = store.read_fgd_dates(self.path, lambda n: self.progress.emit(n, total), self.EVERY)
+            fgd, layers = store.read_fgd_records(self.path, lambda n: self.progress.emit(n, total), self.EVERY)
             if missing:
                 store.fill_tile_meshes(self.path, BV_ZOOM)
                 self.progress.emit(fgd_rows + 1, total)
             bv = store.bv_mesh_counts(self.path, BV_ZOOM)
             self.progress.emit(total, total)
-            self.results = {"fgd": fgd, "bv": bv}
+            self.results = {"fgd": fgd, "layers": layers, "bv": bv}
         except Exception:  # 壊れたファイルなどは「保存なし」として扱う
-            self.results = {"fgd": {}, "bv": {}}
+            self.results = {"fgd": {}, "layers": {}, "bv": {}}
 
 
-def plan_fgd_downloads(listing, stored, type_codes, skip_current):
-    """取得するもの [(mesh, type_code, [一覧の項目...])] を決める。保存済みで同じ日付なら除く"""
+def missing_fgd_layers(stored_layers, mesh, type_code, layer_codes):
+    """チェックしたレイヤーのうち、そのメッシュ・種類でまだ取り込んでいないもの"""
+    have = stored_layers.get((mesh, type_code), set())
+    return [code for code in layer_codes if code not in have]
+
+
+def plan_fgd_downloads(listing, stored, fgd_layers, skip_current, stored_layers):
+    """取得するもの [(mesh, type_code, [一覧の項目...])] を決める。
+
+    fgd_layers は {type_code: [チェックしたレイヤー...]}。保存済みで同じ日付でも、チェックしたレイヤーを
+    取り込んでいなければ取得する（1つの種類の ZIP に複数のレイヤーが入っていて、取り込むのはチェックした分だけ）"""
     groups = {}
     for item in listing:
         type_code = item.get("type_code")
-        if type_code not in type_codes:
+        if type_code not in fgd_layers:
             continue
         groups.setdefault((item["place_code"], type_code), []).append(item)
     plan = []
     for (mesh, type_code), items in sorted(groups.items()):
         items.sort(key=lambda i: i.get("file_split_seq_no") or 0)
-        if skip_current and stored.get((mesh, type_code)) == fgd_api.item_date(items[0]):
+        if (skip_current and stored.get((mesh, type_code)) == fgd_api.item_date(items[0])
+                and not missing_fgd_layers(stored_layers, mesh, type_code, fgd_layers[type_code])):
             continue
         plan.append((mesh, type_code, items))
     return plan
@@ -198,9 +209,10 @@ class FetchThread(QThread):
         self.stage.emit(tr("Fundamental Geospatial Data: querying the list of the latest data…",
                            "基盤地図情報：最新データの一覧を問い合わせています…"))
         listing = fgd_api.query_latest(fgd_api.new_session(), list(self.fgd_layers), self.meshes)
-        stored = store.stored_fgd_dates(self.path)
+        stored, stored_layers = store.read_fgd_records(self.path)
         plan = {}
-        for mesh, type_code, items in plan_fgd_downloads(listing, stored, set(self.fgd_layers), self.skip_current):
+        for mesh, type_code, items in plan_fgd_downloads(
+                listing, stored, self.fgd_layers, self.skip_current, stored_layers):
             plan.setdefault(mesh, []).append((type_code, items))
         listed = {(i["place_code"], i.get("type_code")) for i in listing}
         absent = {}
