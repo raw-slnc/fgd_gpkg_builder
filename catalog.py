@@ -93,7 +93,7 @@ FGD_STYLES = {
     "CommPt": ("#555555", 1.4, None),
     "AdmPt": ("#7b3294", 1.8, None),
     "CommBdy": ("#9a9a9a", 0.2, None),
-    "AdmBdy": ("#7b3294", 0.5, None),
+    "AdmBdy": ("#7b3294", 0.3, None),
     "AdmArea": ("#7b3294", 0.3, None),
     "RdEdg": ("#505050", 0.25, None),
     "RdCompt": ("#8a8a8a", 0.2, None),
@@ -182,7 +182,7 @@ BV_TITLES_EN = {
 
 BV_ITEMS = [
     _bv("AdmArea", "行政区画", "行政", "MultiPolygon", [], ("#7b3294", 0.3, None), overlap="AdmArea"),
-    _bv("AdmBdry", "行政区画界線", "行政", "MultiLineString", [], ("#7b3294", 0.5, None), overlap="AdmBdy"),
+    _bv("AdmBdry", "行政区画界線", "行政", "MultiLineString", [], ("#7b3294", 0.3, None), overlap="AdmBdy"),
     _bv("SpcfArea", "特定地区界", "行政", "MultiLineString", [], ("#b05fa8", 0.3, None), {6101: "特定地区界"}),
     _bv("RdCL", "道路中心線", "道路・鉄道", "MultiLineString", [
         ("vt_drworder", _I), ("vt_flag17", _I), ("vt_lvorder", _I), ("vt_motorway", _I), ("vt_rdctg", _S),

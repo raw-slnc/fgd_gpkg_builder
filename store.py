@@ -690,12 +690,13 @@ def _child_group(parent, name, index=None):
 
 
 def _prune_empty_groups(parent, names):
-    """names のグループのうち、中が空のもの（中も同じ名前のグループだけで空のもの）を外す"""
+    """names のグループのうち、中が空のもの（中も同じ名前のグループだけで空のもの）を外す。
+    ほかのグループの中にあるものも探す。ほかのグループ自体は外さない"""
     from qgis.core import QgsLayerTreeGroup
     for child in list(parent.children()):
-        if isinstance(child, QgsLayerTreeGroup) and child.name() in names:
+        if isinstance(child, QgsLayerTreeGroup):
             _prune_empty_groups(child, names)
-            if not child.children():
+            if child.name() in names and not child.children():
                 parent.removeChildNode(child)
 
 
@@ -722,16 +723,17 @@ def _is_network_layer(layer):
 
 
 def _insert_main_group(root, name):
-    """グループを、レイヤーパネルでいちばん上にあるネットワーク経由のレイヤーの直上に作る。
-    そのレイヤーがグループの中にあれば、そのグループの直上。無ければいちばん上"""
+    """グループを最上位に、レイヤーパネルでいちばん上にあるネットワーク経由のレイヤーの直上に作る。
+    そのレイヤーがグループの中にあれば、最上位にあるそのグループの直上。無ければいちばん上。
+    ほかのグループの中には作らない"""
     target = next((node for node in root.findLayers()
                    if node.layer() is not None and _is_network_layer(node.layer())), None)
     if target is None:
         return root.insertGroup(0, name)
-    if target.parent() is not None and target.parent() is not root:
+    # root の子になるまで親をたどる
+    while target.parent() is not None and target.parent().parent() is not None:
         target = target.parent()
-    parent = target.parent()
-    return parent.insertGroup(parent.children().index(target), name)
+    return root.insertGroup(root.children().index(target), name)
 
 
 def place_layers(path, group_name, fgd_codes, bv_items, meshes):
@@ -750,7 +752,8 @@ def place_layers(path, group_name, fgd_codes, bv_items, meshes):
     project = QgsProject.instance()
     root = project.layerTreeRoot()
     placed = []
-    top_group = root.findGroup(group_name)
+    # 最上位だけを見る（findGroup は奥まで探すので、ほかのグループの中の同名グループを拾ってしまう）
+    top_group = _find_child_group(root, group_name)
 
     def ensure_top_group():
         nonlocal top_group
@@ -829,7 +832,7 @@ def place_layers(path, group_name, fgd_codes, bv_items, meshes):
     # 組み直しで空になった小グループ・グループを片づける。言語を切り替える前の名前や前の版の名前のもの、
     # 前の版で基盤地図情報のグループと同じ階層に作った「最適化ベクトルタイル」も含む
     _prune_empty_groups(root, SUBGROUP_NAMES_ALL | DEFAULT_GROUP_NAMES_ALL | {group_name})
-    top_group = root.findGroup(group_name)
+    top_group = _find_child_group(root, group_name)
     if top_group is not None:
         position = 0
         for name in (admin_group_name(), bv_group_name(), fgd_group_name()):
