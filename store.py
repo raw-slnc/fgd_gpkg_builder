@@ -11,7 +11,9 @@
 
 import os
 import re
+import sqlite3
 import zipfile
+from pathlib import Path
 
 from osgeo import gdal, ogr, osr
 
@@ -706,6 +708,144 @@ def refresh_project_layers(path):
             layer.triggerRepaint()
 
 
+def _style_categories():
+    from qgis.core import QgsMapLayer
+    return (QgsMapLayer.StyleCategory.Symbology | QgsMapLayer.StyleCategory.Labeling
+            | QgsMapLayer.StyleCategory.Rendering)
+
+
+def _stored_style_count(layer):
+    from qgis.core import QgsProviderRegistry
+    return QgsProviderRegistry.instance().listStyles("ogr", layer.source(), [], [], [], "")
+
+
+def _style_targets(fgd_codes, bv_items):
+    for code in dict.fromkeys(fgd_codes):
+        yield code, lambda layer, c=code: _apply_fgd_style(layer, c)
+    for item in bv_items:
+        yield bv_table(item), lambda layer, i=item: _apply_bv_style(layer, i)
+
+
+def _save_initial_style(layer):
+    from qgis.core import QgsMapLayer
+
+    style_args = ("fgd_gpkg_builder", "Initial plugin style", True, "", _style_categories())
+    if hasattr(layer, "saveStyleToDatabaseV2"):
+        result, message = layer.saveStyleToDatabaseV2(*style_args)
+        # QGIS 3 は QFlags、QGIS 4 は enum を Python に返す。後者は | や int() を受け付けない。
+        result_bits = int(getattr(result, "value", result))
+        failed_bits = (QgsMapLayer.SaveStyleResult.QmlGenerationFailed.value
+                       | QgsMapLayer.SaveStyleResult.DatabaseWriteFailed.value)
+        if result_bits & failed_bits:
+            raise OSError(message or tr("The style could not be written.", "スタイルを書き込めませんでした。"))
+    else:
+        # saveStyleToDatabaseV2 がない QGIS 3 では従来の API を使う。
+        message = layer.saveStyleToDatabase(*style_args)
+        if message:
+            raise OSError(message)
+
+
+def _refresh_previous_water_colors(path, layer):
+    """以前の初期スタイルそのままの水部構造物線だけ、青系の色に更新する。"""
+    from qgis.core import QgsCategorizedSymbolRenderer
+    from qgis.PyQt.QtGui import QColor
+
+    previous_palettes = (
+        {5501: "#555555", 5511: "#8c6d31", 5514: "#d62728", 5515: "#ff7f0e",
+         5521: "#1f77b4", 5532: "#2ca02c"},
+        {5501: "#7999b8", 5511: "#8da6b4", 5514: "#9698be", 5515: "#a1b1bd",
+         5521: "#4ba8d8", 5532: "#70b7b8"},
+    )
+    connection = sqlite3.connect(Path(path).absolute().as_uri() + "?mode=ro", uri=True)
+    try:
+        styles = connection.execute(
+            "SELECT styleName, description, useAsDefault FROM layer_styles WHERE f_table_name = ?",
+            ("bv_WStrL",)).fetchall()
+    finally:
+        connection.close()
+    if styles != [("fgd_gpkg_builder", "Initial plugin style", 1)]:
+        return
+    message, ok = layer.loadNamedStyle(layer.source(), False, _style_categories())
+    if not ok:
+        raise OSError(message or tr("The stored style could not be loaded.", "保存済みスタイルを読み込めませんでした。"))
+    renderer = layer.renderer()
+    if not isinstance(renderer, QgsCategorizedSymbolRenderer) or renderer.classAttribute() != "vt_code":
+        return
+    categories = renderer.categories()
+    if len(categories) != len(previous_palettes[0]):
+        return
+    try:
+        colors = {int(category.value()): category.symbol().color().name() for category in categories}
+    except (AttributeError, TypeError, ValueError):
+        return
+    if colors not in previous_palettes:
+        return  # 利用者が色を変更して保存したものは維持する
+    new_colors = BV_BY_LAYER["WStrL"]["code_colors"]
+    for index, category in enumerate(categories):
+        symbol = category.symbol().clone()
+        symbol.setColor(QColor(new_colors[int(category.value())]))
+        renderer.updateCategorySymbol(index, symbol)
+    _save_initial_style(layer)
+
+
+def seed_missing_styles(path):
+    """対象表の未保存スタイルを補い、旧初期色だけ更新する（メインスレッド）。"""
+    from qgis.core import QgsVectorLayer
+
+    ds = open_store(path, False)
+    if ds is None:
+        return []
+    tables = {ds.GetLayer(i).GetName() for i in range(ds.GetLayerCount())}
+    ds = None  # スタイルを書き込む前に GDAL の接続を閉じる
+    errors = []
+    # 選択中の項目だけに限ると、以前取得した未選択の表を手動で追加したときに
+    # GPKG からスタイルを読み込めない。保存済みの表をすべて補完する。
+    for table, apply_default in _style_targets(FGD_LAYER_NAMES, BV_BY_LAYER.values()):
+        if table not in tables:
+            continue
+        try:
+            layer = QgsVectorLayer("{0}|layername={1}".format(path, table), table, "ogr")
+            if not layer.isValid():
+                raise OSError(tr("Could not open the layer.", "レイヤーを開けませんでした。"))
+            count = _stored_style_count(layer)
+            if count < 0:
+                raise OSError(tr("Could not check the stored styles.", "格納済みスタイルを確認できませんでした。"))
+            if count:
+                if table == "bv_WStrL":
+                    _refresh_previous_water_colors(path, layer)
+                continue  # 保存済みのスタイルは維持（水部構造物線の旧初期色だけ更新）
+            apply_default(layer)
+            _save_initial_style(layer)
+        except Exception as error:
+            errors.append(tr("Could not store the style for {0}: {1}",
+                             "{0} のスタイルを格納できませんでした：{1}").format(table, error))
+    return errors
+
+
+def _apply_stored_or_default_style(layer, apply_default):
+    """GPKG のスタイルを優先する。格納されていなければ表示だけ初期スタイルにする。"""
+    try:
+        count = _stored_style_count(layer)
+    except Exception as error:
+        return tr("Could not check the stored styles for {0}: {1}",
+                  "{0} の格納済みスタイルを確認できませんでした：{1}").format(layer.name(), error)
+    if count < 0:
+        return tr("Could not check the stored styles for {0}.",
+                  "{0} の格納済みスタイルを確認できませんでした。").format(layer.name())
+    if count > 0:
+        try:
+            message, ok = layer.loadNamedStyle(layer.source(), False, _style_categories())
+        except Exception as error:
+            message, ok = str(error), False
+        if ok:
+            return ""
+        apply_default(layer)
+        return tr("Could not load the stored style for {0}: {1}",
+                  "{0} の格納済みスタイルを読み込めませんでした：{1}").format(layer.name(), message)
+    apply_default(layer)
+    return ""
+
+
 def _date_label(first, last):
     if not first:
         return ""
@@ -789,12 +929,13 @@ def place_layers(path, group_name, fgd_codes, bv_items, meshes):
           └ 基盤地図情報
     meshes を渡したときは、その2次メッシュ（可視範囲をカバーするもの）の分だけを見せる。GeoPackage の
     ほかの範囲のデータは残る。None のときは絞り込まず、取得済みの範囲をすべて見せる。
-    返り値は置いたレイヤーの名前のリスト"""
+    返り値は (置いたレイヤーの名前のリスト, スタイルのエラーのリスト)"""
     from qgis.core import QgsLayerMetadata, QgsProject, QgsVectorLayer
 
     project = QgsProject.instance()
     root = project.layerTreeRoot()
     placed = []
+    style_errors = []
     # 最上位だけを見る（findGroup は奥まで探すので、ほかのグループの中の同名グループを拾ってしまう）
     top_group = _find_child_group(root, group_name)
 
@@ -841,7 +982,9 @@ def place_layers(path, group_name, fgd_codes, bv_items, meshes):
         layer = QgsVectorLayer(uri, name, "ogr")
         if not layer.isValid():
             return
-        style(layer)
+        style_error = _apply_stored_or_default_style(layer, style)
+        if style_error:
+            style_errors.append(style_error)
         metadata = QgsLayerMetadata(layer.metadata())
         metadata.setRights([rights])
         layer.setMetadata(metadata)
@@ -893,7 +1036,7 @@ def place_layers(path, group_name, fgd_codes, bv_items, meshes):
             node.setExpanded(False)
             nodes.extend(node.children())
         top_group.setExpanded(True)
-    return placed
+    return placed, style_errors
 
 
 STYLE_DIR = os.path.join(os.path.dirname(__file__), "styles")
@@ -971,6 +1114,15 @@ def _apply_bv_symbols(layer, item):
     # QGIS で整えた表示（styles/bv_<レイヤー名>.qml に書き出したもの）があれば使う
     if _load_style_file(layer, bv_table(item)):
         return
+    overlap = item["overlap"]
+    # 対応する基盤地図情報と同じ初期設定の項目は、その QML を共用する。
+    # 等高線など、属性名を読み替えた専用 QML や、個別の色・分類が決まっている項目は上の設定を優先する。
+    if overlap and item["style"] == FGD_STYLES.get(overlap) and not item["code_colors"]:
+        if _load_style_file(layer, overlap):
+            # 道路縁のベクトルタイルには、基盤地図情報のラベルに使う name 項目がない。
+            if overlap == "RdEdg" and "name" not in layer.fields().names():
+                layer.setLabelsEnabled(False)
+            return
     color, size, fill = item["style"]
     if item["source_layer"] == "Anno":
         _apply_anno_labels(layer)

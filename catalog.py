@@ -193,7 +193,7 @@ BV_ITEMS = [
     _bv("RailCL", "鉄道中心線", "道路・鉄道", "MultiLineString", [
         ("vt_flag17", _I), ("vt_lvorder", _I), ("vt_railstate", _S), ("vt_rtcode", _S), ("vt_sngldbl", _S)],
         ("#222222", 0.5, None), {8201: "鉄道中心線"}),
-    _bv("RailTrCL", "軌道の中心線", "道路・鉄道", "MultiLineString", [("vt_drworder", _I)], ("#444444", 0.4, None),
+    _bv("RailTrCL", "軌道の中心線", "道路・鉄道", "MultiLineString", [("vt_drworder", _I)], ("#222222", 0.5, None),
         overlap="RailCL"),
     _bv("BldA", "建築物", "建物・構造物", "MultiPolygon", [("vt_lvorder", _I)], ("#808080", 0.1, "#c8c8c8"),
         {3101: "普通建物", 3102: "堅ろう建物", 3103: "高層建物", 3111: "普通無壁舎", 3112: "堅ろう無壁舎"},
@@ -210,8 +210,9 @@ BV_ITEMS = [
     _bv("WStrL", "水部構造物線", "水", "MultiLineString", [("vt_flag17", _I)], ("#1f4e9c", 0.8, None),
         {5501: "ダム", 5511: "桟橋（鉄、コンクリート）", 5514: "せき", 5515: "水門", 5521: "滝", 5532: "透過水制"},
         overlap="WStrL",
-        code_colors={5501: "#555555", 5511: "#8c6d31", 5514: "#d62728", 5515: "#ff7f0e", 5521: "#1f77b4",
-                     5532: "#2ca02c"}),
+        # 種類の違いを残して退色させ、暗い色ほど明るくしながら水部の青系に寄せる。
+        code_colors={5501: "#607fa6", 5511: "#848f9f", 5514: "#a86e9f", 5515: "#9187b5", 5521: "#278fc9",
+                     5532: "#52a89e"}),
     _bv("WStrA", "水部構造物面", "水", "MultiPolygon", [], ("#4a6fa5", 0.15, "#9fb6d6"),
         {5401: "ダム", 5411: "桟橋（鉄、コンクリート）"}, overlap="WStrA"),
     _bv("WRltLine", "水部表記線", "水", "MultiLineString", [("vt_angle", _R)], ("#6aa0d8", 0.3, None),

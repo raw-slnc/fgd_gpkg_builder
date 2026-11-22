@@ -60,6 +60,17 @@
     th { background: var(--accent-soft); width: 28%; }
     ul, ol { margin: 10px 0 0 18px; padding: 0; }
     li + li { margin-top: 4px; }
+    .style-list {
+      list-style: none;
+      margin-left: 0;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-rows: repeat(var(--rows), auto);
+      grid-auto-flow: column;
+      gap: 4px 16px;
+    }
+    .style-list li { margin: 0; }
+    .style-swatch { display: inline-block; width: 1em; height: 1em; margin-right: 0.35em; vertical-align: -0.12em; border: 0; }
     .lang-btn {
       flex-shrink: 0;
       padding: 6px 14px;
@@ -122,6 +133,7 @@
     .legend i.part { background: var(--part); }
     @media (max-width: 760px) {
       .points, .figure-grid { grid-template-columns: 1fr; }
+      .style-list { grid-template-columns: 1fr; grid-template-rows: none; grid-auto-flow: row; }
     }
   </style>
 </head>
@@ -196,40 +208,93 @@
         <table>
           <tr><th>使用データ</th><td>基盤地図情報と最適化ベクトルタイルの項目。チェックした項目を取得し、レイヤーへ配置し、地図の塗りの基準にします。同じ地物はどちらか一方だけ選べます（⇄）。「ロック」を押すと、今のチェックをプロジェクトの構成として記録し、変えられないようにします（「ロック中」）。同じ構成で別の場所を取得するときに使います。もう一度押すと外れます。ロックを外して変えたチェックは、「構成を復元」でロックに最後に記録した構成に戻せます。</td></tr>
           <tr><th>状況の表</th><td>表示範囲のメッシュごとに、最新のデータの日付と保存済みの状況。「最新の状況を確認」で問い合わせ直します。</td></tr>
-          <tr><th>保存とレイヤー</th><td>保存先の GeoPackage、グループ名、取り直さない設定、取得後に配置する設定。</td></tr>
+          <tr><th>保存とレイヤー</th><td>G.S.I. GPKG、グループ名、取り直さない設定、取得後に配置する設定。</td></tr>
           <tr><th>実行の区域</th><td>取得する件数の見込み、処理中は進み具合。右に「取得」「レイヤーへ配置」「配置する範囲」。待機中はプレビュー地図のチェックと地図の凡例。</td></tr>
           <tr><th>記録</th><td>開くと窓の下に記録が出ます。右に「マニュアル」と言語の切り替え。</td></tr>
         </table>
       </section>
 
       <section>
-        <h2>4. 保存先</h2>
+        <h2>4．凡例</h2>
+        <h3>KAWAI STYLE</h3>
+        <p>次のレイヤーに KAWAI STYLE を適用します。</p>
+        <h3>基盤地図情報・行政データ</h3>
+        <ul class="style-list" style="--rows: 4;">
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #729b6f;"></span>標高点 / <code>ElevPt</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #729b6f;"></span>基準点 / <code>GCP</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #b7484b;"></span>町字の代表点 / <code>CommPt</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #ff9e17;"></span>町字界線 / <code>CommBdy</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #e5b636;"></span>行政区画代表点 / <code>AdmPt</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #ff0400;"></span>行政区画界線 / <code>AdmBdy</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #e77148;"></span>行政区画 / <code>AdmArea</code></li>
+        </ul>
+        <h3>最適化ベクトルタイル</h3>
+        <ul class="style-list" style="--rows: 9;">
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #e77148;"></span>行政区画 / <code>bv_AdmArea</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #ff0400;"></span>行政区画界線 / <code>bv_AdmBdry</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #ff0000;"></span>特定地区界 / <code>bv_SpcfArea</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #00602a;"></span>道路中心線 / <code>bv_RdCL</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #00602a;"></span>道路縁 / <code>bv_RdEdg</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #135f17;"></span>道路構成線 / <code>bv_RdCompt</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #000074;"></span>鉄道中心線 / <code>bv_RailCL</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #000074;"></span>軌道の中心線 / <code>bv_RailTrCL</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #f48b29;"></span>建築物 / <code>bv_BldA</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background: linear-gradient(90deg, #fffb2e 0.0000% 50.0000%, #232323 50.0000% 100.0000%);"></span>送電線 / <code>bv_PwrTrnsmL</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #23c2f6;"></span>水涯線 / <code>bv_WL</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #23c2f6;"></span>河川中心線 / <code>bv_RvrCL</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background: linear-gradient(90deg, #607fa6 0.0000% 16.6667%, #848f9f 16.6667% 33.3333%, #a86e9f 33.3333% 50.0000%, #9187b5 50.0000% 66.6667%, #278fc9 66.6667% 83.3333%, #52a89e 83.3333% 100.0000%);"></span>水部構造物線 / <code>bv_WStrL</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #0dc6b4;"></span>水部構造物面 / <code>bv_WStrA</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #0000ff;"></span>水部表記線 / <code>bv_WRltLine</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #000000;"></span>海岸線 / <code>bv_Cstline</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #23c2f6;"></span>水域 / <code>bv_WA</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #3a1c00;"></span>等高線 / <code>bv_Cntr</code></li>
+        </ul>
+        <h3>基盤地図情報</h3>
+        <ul class="style-list" style="--rows: 6;">
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #00602a;"></span>道路縁 / <code>RdEdg</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #135f17;"></span>道路構成線 / <code>RdCompt</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #000074;"></span>軌道の中心線 / <code>RailCL</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #f48b29;"></span>建築物 / <code>BldA</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #91522d;"></span>建築物の外周線 / <code>BldL</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #0dc6b4;"></span>水部構造物面 / <code>WStrA</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #0000ff;"></span>水部構造物線 / <code>WStrL</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #23c2f6;"></span>水域 / <code>WA</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #23c2f6;"></span>水涯線 / <code>WL</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #3a1c00;"></span>等高線 / <code>Cntr</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #000000;"></span>海岸線 / <code>Cstline</code></li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>5. 保存先</h2>
         <p>初めは、プロジェクトと同じ階層の <code>gsi_fgd_builder/gsi_fgd_builder.gpkg</code> です。使う保存先はプロジェクトに記録されるので、次に開いたときも同じものが選ばれます。</p>
         <ul>
-          <li>そこにすでにデータがあれば、「共有データとして使用しますか？」と聞きます。「いいえ」なら、別の場所か別の名前を選びます。</li>
-          <li>「…」で別の場所の GeoPackage も選べます。地域ごとのデータを、複数のプロジェクトで共有することもできます。</li>
+          <li>既定の場所にGPKGがあれば、取得時に対象範囲のデータを追加・更新することを案内して、使用するか聞きます。</li>
+          <li>「…」を押すと、既存GPKGを使うか、新しいGPKGを作るか選べます。既存GPKGは選択だけでは変わらず、取得時に対象範囲のデータが追加・更新されます。新しいGPKGは取得時に作られます。</li>
+          <li>取り込んだ表にスタイルがまだなければ、プラグインの初期スタイルをGPKGに格納します。以後の配置では、GPKGに格納されたスタイルを使います。</li>
           <li>プロジェクトを保存するまでは取得できません。</li>
         </ul>
       </section>
 
       <section>
-        <h2>5. 取得と中止</h2>
+        <h2>6. 取得と中止</h2>
         <ul>
           <li>取得はメッシュごとに進めます。1つのメッシュは、チェックした内容すべてをそろえてから保存します。</li>
+          <li>変更したレイヤースタイルを次回の配置でも使うには、QGISでG.S.I. GPKGに既定のスタイルとして保存してください。プロジェクトの保存とは別の操作です。</li>
           <li>「中止」は取り込み中のメッシュを終えてから止まり、もう一度押す「すぐに止める」は、そのメッシュを取得前の状態のまま止まります。どちらでも、中途半端なメッシュは残りません。</li>
           <li>取得中に窓を閉じると、中止の仕方を選んでから閉じます。</li>
         </ul>
       </section>
 
       <section>
-        <h2>6. ログイン</h2>
+        <h2>7. ログイン</h2>
         <p>取得には、基盤地図情報ダウンロードサービスの利用者登録（無料）とログインが必要です。最新の状況の確認・地図の塗り・レイヤーへの配置は、ログインしなくても使えます。</p>
         <p>最適化ベクトルタイルは、国土地理院の公開ページ（<a href="https://github.com/gsi-cyberjapan/optimal_bvmap">optimal_bvmap</a>）から別途取得することもできます。</p>
         <div class="note">ID・パスワードは自動入力のために QGIS の設定に保存できますが、暗号化されません。共有PCでは推奨しません。</div>
       </section>
 
       <section>
-        <h2>7. データの利用と出典</h2>
+        <h2>8. データの利用と出典</h2>
         <p>このプラグインで取得するデータは、すべて国土地理院のものです。取得したデータを地図や資料、画面で使うとき、人に渡すときは、国土地理院の利用規約と測量法に従ってください。</p>
         <div class="note">利用規約や手続の内容は変わることがあります。ここに書いたのは目安です。使う前に、国土地理院のページで最新の内容を確認してください（下の「確認先」）。</div>
 
@@ -292,7 +357,7 @@
       </section>
 
       <section>
-        <h2>8. このプラグインについて</h2>
+        <h2>9. このプラグインについて</h2>
         <ul>
           <li>このプラグインは国土地理院が制作したものではありません。国土地理院が推奨・保証するものでもありません。</li>
           <li>このプラグインは無保証です。使用によって生じた結果について、作者は責任を負いません。</li>
@@ -361,40 +426,93 @@
         <table>
           <tr><th>Data to use</th><td>Items of the Fundamental Geospatial Data and of the optimized vector tiles. The checked items are fetched, placed as layers, and used as the basis of the map colours. For the same features, only one of the two can be selected (⇄). "Lock" records the checked items as the configuration of the project and keeps them from being changed ("Locked"); use it to fetch other areas with the same configuration. Press again to unlock. After changing the checks while unlocked, "Restore" returns them to the configuration last recorded by the lock.</td></tr>
           <tr><th>Status table</th><td>For each mesh in view, the latest data date and what is stored. "Check latest status" queries again.</td></tr>
-          <tr><th>Storage and layers</th><td>The GeoPackage, the group name, whether to skip up-to-date data, and whether to place layers after fetching.</td></tr>
+          <tr><th>Storage and layers</th><td>The storage GPKG, the group name, whether to skip up-to-date data, and whether to place layers after fetching.</td></tr>
           <tr><th>Action area</th><td>What will be fetched, or the progress while working. On the right: "Fetch", "Place layers" and the placement range. When idle: the preview map check box and the map legend.</td></tr>
           <tr><th>Log</th><td>Opens the log below the window. On the right: "Manual" and the language switch.</td></tr>
         </table>
       </section>
 
       <section>
-        <h2>4. Where data is saved</h2>
+        <h2>4. Legend</h2>
+        <h3>KAWAI STYLE</h3>
+        <p>KAWAI STYLE is applied to these layers.</p>
+        <h3>FGD administrative data</h3>
+        <ul class="style-list" style="--rows: 4;">
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #729b6f;"></span>Elevation point / <code>ElevPt</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #729b6f;"></span>Control point / <code>GCP</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #b7484b;"></span>Town/aza point / <code>CommPt</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #ff9e17;"></span>Town/aza boundary / <code>CommBdy</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #e5b636;"></span>Administrative point / <code>AdmPt</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #ff0400;"></span>Administrative boundary / <code>AdmBdy</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #e77148;"></span>Administrative area / <code>AdmArea</code></li>
+        </ul>
+        <h3>Optimized vector tiles</h3>
+        <ul class="style-list" style="--rows: 9;">
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #e77148;"></span>Administrative area / <code>bv_AdmArea</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #ff0400;"></span>Administrative boundary / <code>bv_AdmBdry</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #ff0000;"></span>Special district boundary / <code>bv_SpcfArea</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #00602a;"></span>Road centerline / <code>bv_RdCL</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #00602a;"></span>Road edge / <code>bv_RdEdg</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #135f17;"></span>Road component line / <code>bv_RdCompt</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #000074;"></span>Railway centerline / <code>bv_RailCL</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #000074;"></span>Railway track centerline / <code>bv_RailTrCL</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #f48b29;"></span>Building / <code>bv_BldA</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background: linear-gradient(90deg, #fffb2e 0.0000% 50.0000%, #232323 50.0000% 100.0000%);"></span>Power transmission line / <code>bv_PwrTrnsmL</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #23c2f6;"></span>Waterline / <code>bv_WL</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #23c2f6;"></span>River centerline / <code>bv_RvrCL</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background: linear-gradient(90deg, #607fa6 0.0000% 16.6667%, #848f9f 16.6667% 33.3333%, #a86e9f 33.3333% 50.0000%, #9187b5 50.0000% 66.6667%, #278fc9 66.6667% 83.3333%, #52a89e 83.3333% 100.0000%);"></span>Water structure line / <code>bv_WStrL</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #0dc6b4;"></span>Water structure area / <code>bv_WStrA</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #0000ff;"></span>Water notation line / <code>bv_WRltLine</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #000000;"></span>Coastline / <code>bv_Cstline</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #23c2f6;"></span>Water area / <code>bv_WA</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #3a1c00;"></span>Contour / <code>bv_Cntr</code></li>
+        </ul>
+        <h3>Fundamental Geospatial Data</h3>
+        <ul class="style-list" style="--rows: 6;">
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #00602a;"></span>Road edge / <code>RdEdg</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #135f17;"></span>Road component line / <code>RdCompt</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #000074;"></span>Railway track centerline / <code>RailCL</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #f48b29;"></span>Building / <code>BldA</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #91522d;"></span>Building outline / <code>BldL</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #0dc6b4;"></span>Water structure area / <code>WStrA</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #0000ff;"></span>Water structure line / <code>WStrL</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #23c2f6;"></span>Water area / <code>WA</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #23c2f6;"></span>Waterline / <code>WL</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #3a1c00;"></span>Contour / <code>Cntr</code></li>
+          <li><span class="style-swatch" aria-hidden="true" style="background-color: #000000;"></span>Coastline / <code>Cstline</code></li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>5. Where data is saved</h2>
         <p>By default, <code>gsi_fgd_builder/gsi_fgd_builder.gpkg</code> next to the project file. The GeoPackage used is recorded in the project, so it is selected again next time.</p>
         <ul>
-          <li>If data already exists there, you are asked whether to use it as shared data. If not, choose another location or another name.</li>
-          <li>"…" selects a GeoPackage elsewhere. Several projects can share the data of one region.</li>
+          <li>If a GPKG already exists at the default location, you are told that fetching will add or update data for the selected area and asked whether to use it.</li>
+          <li>"…" lets you choose an existing GPKG or name a new one. Selecting an existing GPKG does not change it; fetching later adds or updates data for the selected area. A new GPKG is created when you fetch data.</li>
+          <li>If an imported table has no stored style, the plugin saves its initial style in the GPKG. Later placement uses the style stored in the GPKG.</li>
           <li>Fetching is not possible until the project is saved.</li>
         </ul>
       </section>
 
       <section>
-        <h2>5. Fetching and stopping</h2>
+        <h2>6. Fetching and stopping</h2>
         <ul>
           <li>Fetching goes mesh by mesh. Each mesh is saved only when all checked contents are complete.</li>
+          <li>To keep edited layer styles for later placement, save them in the G.S.I. GPKG as default styles in QGIS. This is separate from saving the project.</li>
           <li>"Stop" finishes the mesh being imported first; "Stop now" (pressing again) leaves that mesh as it was before the fetch. Either way, no half-imported mesh is left.</li>
           <li>Closing the window during a fetch asks how to stop, then closes.</li>
         </ul>
       </section>
 
       <section>
-        <h2>6. Login</h2>
+        <h2>7. Login</h2>
         <p>Fetching requires a free user account for the GSI download service (基盤地図情報ダウンロードサービス) and a login. Checking the latest status, the map colours and placing layers work without logging in.</p>
         <p>The optimized vector tiles can also be obtained separately from the GSI release page (<a href="https://github.com/gsi-cyberjapan/optimal_bvmap">optimal_bvmap</a>).</p>
         <div class="note">The ID and password can be saved in the QGIS settings for automatic filling, but they are not encrypted. Not recommended on a shared PC.</div>
       </section>
 
       <section>
-        <h2>7. Use of data and attribution</h2>
+        <h2>8. Use of data and attribution</h2>
         <p>All data fetched by this plugin belongs to the Geospatial Information Authority of Japan (GSI). When you use it in maps, documents or on screen, or give it to others, follow the GSI terms of use and the Survey Act of Japan.</p>
         <div class="note">Terms and procedures may change. What is written here is a guide only; check the latest information on the GSI pages before use (see "Where to check" below).</div>
 
@@ -457,7 +575,7 @@
       </section>
 
       <section>
-        <h2>8. About this plugin</h2>
+        <h2>9. About this plugin</h2>
         <ul>
           <li>This plugin was not made by GSI, and is not endorsed or guaranteed by GSI.</li>
           <li>The plugin is provided without warranty; the author takes no responsibility for any result of its use.</li>

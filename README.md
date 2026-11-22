@@ -3,7 +3,7 @@
 Grid Sheet Importer and Fundamental GeoPackage Builder is a QGIS plugin that fetches the Fundamental Geospatial Data (基盤地図情報) and the optimized vector tiles of the Geospatial Information Authority of Japan sheet by sheet (2nd-level meshes) and builds them into one GeoPackage, placed as grouped layers.
 
 ![QGIS](https://img.shields.io/badge/QGIS-3.44%2B%20%2F%204.x-green)
-![Version](https://img.shields.io/badge/version-0.1.0-blue)
+![Version](https://img.shields.io/badge/version-0.1.1-blue)
 
 [日本語はこちら](#日本語)
 
